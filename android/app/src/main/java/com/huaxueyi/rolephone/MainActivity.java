@@ -1,15 +1,30 @@
 package com.huaxueyi.rolephone;
 
+import android.Manifest;
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.ClipData;
+import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Color;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
 import android.os.Bundle;
+import android.provider.MediaStore;
+import android.util.Base64;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.ViewGroup;
+import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.RenderProcessGoneDetail;
+import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -19,12 +34,23 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.File;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
 
 /**
  * 一个壳：
@@ -43,6 +69,8 @@ public class MainActivity extends Activity {
     private static final String PORT = "8787";
     private static final String HOME_URL = "http://127.0.0.1:" + PORT + "/";
     private static final int FILE_CHOOSER_REQUEST = 1001;
+    private static final int PHOTO_PERMISSION_REQUEST = 1002;
+    private static final String PREFS = "rolephone";
 
     static {
         System.loadLibrary("native-lib");
@@ -120,6 +148,16 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
+        // 网页通过它把图片存进相册、主动要相册权限
+        webView.addJavascriptInterface(new AndroidBridge(), "NocturneAndroid");
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
+            if (mimetype != null && mimetype.startsWith("image/")) {
+                saveImageToAlbumAsync(url, mimetype, null);
+            } else {
+                downloadWithSystem(url, userAgent, contentDisposition, mimetype);
+            }
+        });
+
         WebView.setWebContentsDebuggingEnabled(false);
 
         webView.setWebViewClient(new WebViewClient() {
@@ -192,7 +230,9 @@ public class MainActivity extends Activity {
             }
         });
 
-        // 网页里选图要能选到本地文件
+        // 网页里选图要能打开系统相册/文件选择器
+        // params.createIntent() 在一些 ROM 上解析不出来，就自己拼一个，
+        // 顺便支持多选（参考图一次放好几张）和 .gz/.json 这类备份文件
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView view,
@@ -202,12 +242,20 @@ public class MainActivity extends Activity {
                     fileCallback.onReceiveValue(null);
                 }
                 fileCallback = callback;
-                Intent intent = params.createIntent();
+
+                Intent intent = buildFileChooserIntent(params);
+                if (intent == null) {
+                    fileCallback = null;
+                    toast("这台设备没有可用的相册/文件选择器");
+                    return false;
+                }
                 try {
                     startActivityForResult(intent, FILE_CHOOSER_REQUEST);
                     return true;
                 } catch (Exception e) {
+                    Log.w(TAG, "打开选择器失败", e);
                     fileCallback = null;
+                    toast("打不开相册，试试从文件管理器选");
                     return false;
                 }
             }
@@ -217,7 +265,384 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         rootLayout.addView(webView, 0, params);
 
+        ensurePhotoPermissionOnce();
         loadHome();
+    }
+
+    private void toast(String text) {
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
+    }
+
+    /** 看看有没有应用能处理这个 Intent（Android 11+ 需要 manifest 里的 queries 才看得见） */
+    private boolean canHandle(Intent intent) {
+        try {
+            List<ResolveInfo> list = getPackageManager()
+                    .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY);
+            return list != null && !list.isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private Intent buildFileChooserIntent(WebChromeClient.FileChooserParams params) {
+        boolean multiple = params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE;
+
+        // 从 accept 里挑 mime 类型；带 .gz/.json 这种扩展名的就直接放开成 */*
+        List<String> types = new ArrayList<>();
+        boolean anyExtension = false;
+        String[] accepts = params.getAcceptTypes();
+        if (accepts != null) {
+            for (String accept : accepts) {
+                if (accept == null) {
+                    continue;
+                }
+                String value = accept.trim();
+                if (value.isEmpty()) {
+                    continue;
+                }
+                if (value.startsWith(".")) {
+                    anyExtension = true;
+                    continue;
+                }
+                int slash = value.indexOf('/');
+                if (slash > 0) {
+                    types.add(value);
+                }
+            }
+        }
+        if (anyExtension || types.isEmpty()) {
+            types.clear();
+            types.add("*/*");
+        }
+
+        // 有相册权限、又是挑单张图时，直接叫系统相册来，比文件选择器少点几下
+        if (!multiple && types.size() == 1 && types.get(0).startsWith("image/")
+                && hasPhotoPermission()) {
+            Intent gallery = new Intent(Intent.ACTION_PICK);
+            gallery.setType("image/*");
+            if (canHandle(gallery)) {
+                return gallery;
+            }
+        }
+
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(types.size() == 1 ? types.get(0) : "*/*");
+        if (types.size() > 1) {
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[0]));
+        }
+        if (multiple) {
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        }
+        if (canHandle(intent)) {
+            return intent;
+        }
+
+        // 兜底 1：老式的「选内容」
+        Intent legacy = new Intent(Intent.ACTION_GET_CONTENT);
+        legacy.addCategory(Intent.CATEGORY_OPENABLE);
+        legacy.setType(types.size() == 1 ? types.get(0) : "*/*");
+        if (types.size() > 1) {
+            legacy.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[0]));
+        }
+        if (multiple) {
+            legacy.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        }
+        if (canHandle(legacy)) {
+            return legacy;
+        }
+
+        // 兜底 2：相册专用入口（只挑图片时用）
+        if (types.size() == 1 && types.get(0).startsWith("image/")) {
+            Intent pick = new Intent(Intent.ACTION_PICK);
+            pick.setType("image/*");
+            if (canHandle(pick)) {
+                return pick;
+            }
+        }
+        return null;
+    }
+
+    // ---------- 相册权限 ----------
+
+    private String photoPermissionName() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return Manifest.permission.READ_MEDIA_IMAGES;
+        }
+        return Manifest.permission.READ_EXTERNAL_STORAGE;
+    }
+
+    private boolean hasPhotoPermission() {
+        return checkSelfPermission(photoPermissionName()) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** 装好第一次进来问一次；之后不再主动骚扰，点选图时还会再问 */
+    private void ensurePhotoPermissionOnce() {
+        if (hasPhotoPermission()) {
+            return;
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        if (prefs.getBoolean("photo_permission_asked", false)) {
+            return;
+        }
+        prefs.edit().putBoolean("photo_permission_asked", true).apply();
+        requestPhotoPermission();
+    }
+
+    private void requestPhotoPermission() {
+        if (hasPhotoPermission()) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(new String[]{Manifest.permission.READ_MEDIA_IMAGES},
+                        PHOTO_PERMISSION_REQUEST);
+            } else if (Build.VERSION.SDK_INT >= 29) {
+                requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
+                        PHOTO_PERMISSION_REQUEST);
+            } else {
+                requestPermissions(new String[]{
+                        Manifest.permission.READ_EXTERNAL_STORAGE,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE
+                }, PHOTO_PERMISSION_REQUEST);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "请求相册权限失败", e);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != PHOTO_PERMISSION_REQUEST) {
+            return;
+        }
+        boolean granted = grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        Log.i(TAG, granted ? "相册权限已授予" : "相册权限被拒绝");
+        if (!granted) {
+            toast("不给相册权限也能选图，只是每次要自己在系统选择器里找");
+        }
+    }
+
+    // ---------- 保存图片到相册 ----------
+
+    private void saveImageToAlbumAsync(String src, String mime, String name) {
+        if (src == null || src.isEmpty()) {
+            return;
+        }
+        new Thread(() -> {
+            boolean ok;
+            String message;
+            try {
+                byte[] bytes = readImageBytes(src);
+                if (bytes == null || bytes.length == 0) {
+                    throw new IOException("图片是空的");
+                }
+                String type = (mime != null && mime.startsWith("image/")) ? mime : guessMime(src);
+                String fileName = (name != null && !name.isEmpty()) ? name : buildImageName(type);
+                Uri saved = writeImageToAlbum(bytes, type, fileName);
+                ok = saved != null;
+                message = ok ? "已存到相册 Pictures/Nocturne" : "保存失败";
+            } catch (Exception e) {
+                Log.w(TAG, "保存图片失败", e);
+                ok = false;
+                message = "保存失败：" + (e.getMessage() == null ? e.toString() : e.getMessage());
+            }
+            final boolean success = ok;
+            final String text = message;
+            runOnUiThread(() -> {
+                if (webView != null) {
+                    webView.evaluateJavascript(
+                            "window.__nocturneSaved && window.__nocturneSaved(" 
+                                    + (success ? "true" : "false") + "," + jsString(text) + ")",
+                            null);
+                }
+                toast(text);
+            });
+        }, "save-image").start();
+    }
+
+    /** 把 JS 字符串安全地塞进 evaluateJavascript */
+    private String jsString(String value) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '"' || c == '\\') {
+                sb.append('\\').append(c);
+            } else if (c == '\n') {
+                sb.append("\\n");
+            } else if (c < 0x20) {
+                sb.append(' ');
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.append('"').toString();
+    }
+
+    private byte[] readImageBytes(String src) throws IOException {
+        if (src.startsWith("data:")) {
+            int comma = src.indexOf(',');
+            if (comma < 0) {
+                throw new IOException("图片数据不完整");
+            }
+            String meta = src.substring(5, comma);
+            String payload = src.substring(comma + 1);
+            if (meta.contains("base64")) {
+                return Base64.decode(payload, Base64.DEFAULT);
+            }
+            return URLDecoder.decode(payload, "UTF-8").getBytes("UTF-8");
+        }
+
+        String url = src;
+        if (url.startsWith("//")) {
+            url = "http:" + url;
+        }
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(30000);
+        conn.setInstanceFollowRedirects(true);
+        conn.setRequestProperty("User-Agent", "Nocturne/Android");
+        String cookie = CookieManager.getInstance().getCookie(url);
+        if (cookie != null) {
+            conn.setRequestProperty("Cookie", cookie);
+        }
+        try {
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) {
+                throw new IOException("HTTP " + code);
+            }
+            try (InputStream in = new BufferedInputStream(conn.getInputStream());
+                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
+                return out.toByteArray();
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private Uri writeImageToAlbum(byte[] bytes, String mime, String name) throws IOException {
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+            values.put(MediaStore.Images.Media.MIME_TYPE, mime);
+            values.put(MediaStore.Images.Media.RELATIVE_PATH,
+                    Environment.DIRECTORY_PICTURES + "/Nocturne");
+            values.put(MediaStore.Images.Media.IS_PENDING, 1);
+            Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) {
+                throw new IOException("相册不接受这个文件");
+            }
+            try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                if (out == null) {
+                    throw new IOException("写不进相册");
+                }
+                out.write(bytes);
+            } catch (IOException e) {
+                getContentResolver().delete(uri, null, null);
+                throw e;
+            }
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.Images.Media.IS_PENDING, 0);
+            getContentResolver().update(uri, done, null, null);
+            return uri;
+        }
+
+        File dir = new File(Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_PICTURES), "Nocturne");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IOException("建不了相册目录");
+        }
+        File file = new File(dir, name);
+        try (OutputStream out = new FileOutputStream(file)) {
+            out.write(bytes);
+        }
+        MediaScannerConnection.scanFile(this, new String[]{file.getAbsolutePath()},
+                new String[]{mime}, null);
+        return Uri.fromFile(file);
+    }
+
+    private String guessMime(String src) {
+        String lower = src.toLowerCase(Locale.US);
+        if (lower.contains(".jpg") || lower.contains(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (lower.contains(".webp")) {
+            return "image/webp";
+        }
+        if (lower.contains(".gif")) {
+            return "image/gif";
+        }
+        return "image/png";
+    }
+
+    private String buildImageName(String mime) {
+        String ext = "png";
+        if ("image/jpeg".equals(mime)) {
+            ext = "jpg";
+        } else if ("image/webp".equals(mime)) {
+            ext = "webp";
+        } else if ("image/gif".equals(mime)) {
+            ext = "gif";
+        }
+        String stamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+        return "nocturne-" + stamp + "." + ext;
+    }
+
+    private void downloadWithSystem(String url, String userAgent,
+                                    String contentDisposition, String mime) {
+        try {
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            request.setNotificationVisibility(
+                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            String fileName = URLUtil.guessFileName(url, contentDisposition, mime);
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+            String cookie = CookieManager.getInstance().getCookie(url);
+            if (cookie != null) {
+                request.addRequestHeader("Cookie", cookie);
+            }
+            if (userAgent != null) {
+                request.addRequestHeader("User-Agent", userAgent);
+            }
+            DownloadManager manager = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            if (manager != null) {
+                manager.enqueue(request);
+                toast("开始下载到 Download");
+                return;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "系统下载失败", e);
+        }
+        toast("这个文件请在浏览器里下载");
+    }
+
+    /** 网页里调 window.NocturneAndroid.xxx() */
+    public class AndroidBridge {
+        @JavascriptInterface
+        public void saveImage(String src) {
+            saveImageToAlbumAsync(src, null, null);
+        }
+
+        @JavascriptInterface
+        public void saveImageAs(String src, String name) {
+            saveImageToAlbumAsync(src, null, name);
+        }
+
+        @JavascriptInterface
+        public void requestPhotoPermission() {
+            runOnUiThread(() -> MainActivity.this.requestPhotoPermission());
+        }
+
+        @JavascriptInterface
+        public boolean hasPhotoPermission() {
+            return MainActivity.this.hasPhotoPermission();
+        }
     }
 
     private void loadHome() {
@@ -329,7 +754,18 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == FILE_CHOOSER_REQUEST && fileCallback != null) {
-            Uri[] results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+            Uri[] results = null;
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                ClipData clip = data.getClipData();
+                if (clip != null && clip.getItemCount() > 0) {
+                    results = new Uri[clip.getItemCount()];
+                    for (int i = 0; i < clip.getItemCount(); i++) {
+                        results[i] = clip.getItemAt(i).getUri();
+                    }
+                } else if (data.getData() != null) {
+                    results = new Uri[]{data.getData()};
+                }
+            }
             fileCallback.onReceiveValue(results);
             fileCallback = null;
             return;
