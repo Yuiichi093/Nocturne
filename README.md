@@ -4,7 +4,7 @@
 
 # Nocturne
 
-**一个跑在自己手机上的 AI 角色聊天应用**
+**在手机上本地运行的 AI 角色聊天应用**
 
 角色聊天 · 小剧场 · 朋友圈 · 世界书 · 生图
 
@@ -16,155 +16,109 @@
 
 ---
 
-## 这是什么
+## 简介
 
-Nocturne 是一个**完全跑在本地**的角色扮演聊天应用：Node.js 起一个本地服务，
-浏览器打开 `127.0.0.1:8787` 使用。没有云端、没有注册表，聊天记录和图片都存在你自己手机上的 SQLite 里。
-账号也只是本机的一份用户名密码（`data/auth.db`），一台设备可以有多个账号，彼此的数据互不可见。
+Nocturne 是一个本地运行的角色扮演聊天应用。数据存在设备上的 SQLite 里，不经过任何服务器。
 
-它最初是为在 Android（Termux）上使用而写的，界面按 iOS 的风格做：分组灰底、白卡片、底部升起的面板。
+界面为 iOS 风格：分组灰底、白卡片、底部升起的面板。
 
-> 不内置任何模型。你需要自备一个 OpenAI 兼容的 API（模型名、地址、Key 自己填），
-> 想用哪家都行，也可以用本地模型。
+应用本身不含模型，需要填入一个 OpenAI 兼容接口（Base URL、模型名、API Key），也可以接本地模型。
 
 ## 功能
 
 **聊天**
 - 角色人设、用户人设、开场白，支持多套人设
-- 回复分成【旁白】和【对白】，按微信的节奏说话，不是小说体
-- 图片：发给角色，他能读图；也能让他画图（带角色参考图）
-- 表情包：每个角色一套，你自己写每张图的意思
-- 重新生成：一次给三份候选，不满意换一批
-- 旁白 / 重新生成 / 图片都在输入框的「＋」里
+- 回复分为旁白与对白
+- 支持发送图片，角色可以读图，也可以按角色参考图生成图片
+- 每个角色一套表情包，含义可自定义
+- 一次生成三份候选回复，可重新生成
 
 **小剧场**
-- 剧本 → 会话，可扮演角色、也可上帝视角
-- 剧情走向提示、重选、分支、章节管理
-- 给当前这一幕生图，图直接进剧情流
+- 剧本生成会话，可扮演角色或以上帝视角推进
+- 剧情提示、重选、分支、章节管理
+- 为当前场景生成插画，图片进入剧情流
 
 **朋友圈**
-- 角色可以评论、点赞，也能自己发动态
+- 角色可以评论、点赞、自主发动态
 - 同一世界观的角色互相可见
-- 角色能读你发的图片内容
+- 角色可以读取图片内容
 
 **账号**
-- 单机多账号：一个账号一个数据库文件，互相看不见
-- 登录 / 注册页、改密码、退出；连错 5 次歇 3 秒
-- 升级前的老数据由第一个注册的账号自动继承
+- 单机多账号，账号之间的数据互不可见
+- 登录、注册、改密码、退出
+- 升级前的数据由第一个注册的账号继承
 
 **其他**
-- 世界书（关键词检索，连角色名字一起匹配）
-- 多世界观、日历/节日、消息编辑与历史版本
-- 备份导出/恢复（备份默认不含 API Key）
-- 模型分工：文字/思考、看图、生图各用各的模型
+- 世界书：关键词检索，包含角色名匹配
+- 多世界观、日历与节日、消息编辑与历史版本
+- 备份导出与恢复，备份默认不含 API Key
+- 文字、看图、生图可分别指定模型
 
 ## 截图
 
-还没拍。手机截图放进 `docs/screenshots/`，命名见 [那里的说明](docs/screenshots/README.md)，
-README 会显示下面这排：
-
-<!-- 拍好之后把这段注释删掉，换成三张图：
+<!-- 截图放到 docs/screenshots/ 后，换成：
 | 聊天 | 小剧场 | 朋友圈 |
 | --- | --- | --- |
 | ![聊天](docs/screenshots/chat.png) | ![小剧场](docs/screenshots/theater.png) | ![朋友圈](docs/screenshots/moments.png) |
 -->
 
-## 快速开始
+## 安装
 
-### 手机上（Termux）
+### Android APK
+
+从 [Releases](https://github.com/Yuiichi093/Nocturne/releases) 下载 `app-release.apk`。
+适用于 arm64 设备，Android 8.0 及以上。版本更新直接覆盖安装，数据保留。
+
+应用内已包含运行所需的一切，不需要安装 Termux 或 Node.js。
+
+### 手机（Termux）
 
 ```bash
-pkg install nodejs        # Node 26
+pkg install nodejs
 git clone https://github.com/Yuiichi093/Nocturne.git
 cd rolephone
 npm install
 node server.js
 ```
 
-然后浏览器打开 `http://127.0.0.1:8787`。
-想让它开机自启，可以用 Termux:Boot 配一条启动命令；想有个桌面图标，浏览器菜单里选「添加到主屏幕」。
+打开 `http://127.0.0.1:8787`。想开机自启可以用 Termux:Boot；想有桌面图标，浏览器菜单里选「添加到主屏幕」。
 
-### 电脑上
+### 电脑
 
-同样的命令，`node server.js` 之后开 `http://127.0.0.1:8787`。数据会在 `data/` 下自动生成。
+命令相同。启动后打开 `http://127.0.0.1:8787`，数据在 `data/` 下自动生成。
 
-### 版本说明
+### 版本要求
 
-推荐 Node 24 以上（Termux 里 `pkg install nodejs` 给的就是 26）。
-Node 18～22 也能跑：没有内置 `node:sqlite` 时会自动切到 `sql.js`（WASM 版 SQLite）兼容层，
-功能一样，只是写入落盘稍慢。APK 分支就是跑在 Node 18 上的。
+推荐 Node 24 及以上。Node 18～22 也可以运行：没有内置 `node:sqlite` 时自动改用 `sql.js`
+（WASM 版 SQLite），功能一致，写入落盘稍慢。
 
-### 配置模型
+## 配置模型
 
-进「模型设置」，填 Base URL、模型名、API Key，然后点「测试」——它会做一次自检，
-报告这个模型能不能看图、能不能生图，省得你猜。
+打开「模型设置」，填入 Base URL、模型名、API Key，点「测试」会做一次自检，显示该模型
+能否看图、能否生图。
 
-- 文字与思考：平时的对话、剧情、朋友圈都用它
-- 看图：发给角色的图片由它来读
-- 生图：画图用的模型
+- 文字与思考：日常对话、剧情、朋友圈
+- 看图：读取发送给角色的图片
+- 生图：生成图片
 
-## 目录结构
+## 数据与账号
 
-```
-server.js            HTTP 入口，路由注册
-db.js / migrate.js   SQLite 连接与自动迁移（启动时自动补表补列）
-llm.js               统一的模型调用（对话 / 看图）
-chat-api.js          聊天
-theater-api.js       小剧场剧本与会话
-theater-play-api.js  小剧场推进与生图
-moment-api.js        朋友圈
-moment-ai.js         朋友圈的 AI 评论与自主发动态
-image-api.js         生图与参考图
-sticker-api.js       表情包
-backup-api.js        备份导出与恢复
-worldbook*.js        世界书
-public/              前端（裸 HTML/CSS/JS，无构建步骤）
-```
+数据目录为 `data/`：数据库、上传的图片、备份都在这里，不参与版本控制。
 
-## 设计原则
-
-- **本地优先**：数据只在你自己的机器上，没有任何遥测。
-- **无构建**：前端是原生 HTML/CSS/JS，改完刷新就生效，不需要打包。
-- **可组合的模型**：任何 OpenAI 兼容接口都能用，能力靠「测试」自检，不写死厂商。
-- **数据库自动迁移**：新版本直接覆盖代码即可，`migrate.js` 会补上缺的表和列。
-
-## 更新
-
-```bash
-git pull && npm install && node server.js
-```
-
-数据不会被覆盖：`data/` 是运行期目录，不在版本控制里。
-从没有账号的版本升级上来时，第一次注册会接管原来的 `data/saudade.db` 与图片，
-见 [docs/ACCOUNTS.md](docs/ACCOUNTS.md)。
-
-## 关于 APK
-
-独立的 Android 应用：WebView 壳 + 内置 Node 18（nodejs-mobile），数据层在缺少
-`node:sqlite` 时自动退到 WASM 版 SQLite。构建走 GitHub Actions 的 Android workflow，
-产物在 [Releases](https://github.com/Yuiichi093/Nocturne/releases) 里，只包含 `arm64-v8a`。
-详见 [docs/ANDROID.md](docs/ANDROID.md)；账号与数据隔离见 [docs/ACCOUNTS.md](docs/ACCOUNTS.md)。
-
-也可以在手机浏览器里打开服务后「添加到主屏幕」，当作 PWA 用，不必装 APK。
+新增账号不需要注册任何在线服务，账号仅存在本机 `data/auth.db`。
+备份按账号导出，账号 A 的备份不包含账号 B 的内容。详见 [docs/ACCOUNTS.md](docs/ACCOUNTS.md)。
 
 ## 开发
 
 ```bash
-npm start             # 起服务，默认 http://127.0.0.1:8787
-npm run check         # 语法检查（node --check）
+npm start             # 启动服务，默认 http://127.0.0.1:8787
+npm run check         # 语法检查
 ```
 
-贡献前请读 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## 谁做的
-
-**Yuiichi** —— 想法、界面、需求，以及每一次真机上的安装与反馈。这个项目里
-长什么样、该有什么，基本都是她定的。
-
-**阿灯（Aiden）** —— 结对编程的搭子。代码、文档、打包脚本、CI，以及一路踩出来的
-那些坑（比如 Node 18 没编 ICU 这种）都是一起弄的，写的时候一直在她的手机和
-她的耐心上做实验。
+架构说明见 [docs/ANDROID.md](docs/ANDROID.md)，贡献说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可
 
 [MIT](LICENSE) © Yuiichi
+
+由 Yuiichi 和 Aiden 制作。
