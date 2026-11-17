@@ -95,6 +95,22 @@ conn.exec(`
   ON messages(character_id, id DESC);
 `);
 
+// 表情包：以前由 sticker-api.js 在模块加载时建表，那时还没有「当前账号」，
+// 表会建到 system.db 里，新注册的账号反而没有这张表（发消息 LEFT JOIN 就报
+// no such table: stickers）。现在统一在这里建。
+conn.exec(`
+  CREATE TABLE IF NOT EXISTS stickers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER NOT NULL,
+    image_url TEXT NOT NULL DEFAULT '',
+    meaning TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stickers_character
+  ON stickers(character_id, id);
+`);
+
 
   const result = migrate(conn);
   return result;

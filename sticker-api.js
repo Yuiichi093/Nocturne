@@ -3,18 +3,7 @@
 // 意思是给模型看的——你发一个表情，角色得知道它代表什么情绪。
 
 module.exports = function (app, db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS stickers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      character_id INTEGER NOT NULL,
-      image_url TEXT NOT NULL DEFAULT '',
-      meaning TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_stickers_character
-    ON stickers(character_id, id);
-  `);
+  // 建表语句统一在 schema.js（这里在模块加载时还没有账号上下文）
 
   function cleanText(value) {
     return String(value == null ? '' : value).trim();
