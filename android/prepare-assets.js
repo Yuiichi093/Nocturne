@@ -65,14 +65,54 @@ function main() {
 
   // 3. 入口
   fs.writeFileSync(path.join(STAGE, 'main.js'), `// 由 prepare-assets.js 生成，不要手改
-process.chdir(__dirname);
+const fs = require('fs');
+const path = require('path');
 
-// APK 里的 Node 是 18，没有 node:sqlite，走 sql.js 兼容层
+// 一切输出都同时写进 boot.log，起不来的时候 MainActivity 会把这份日志显示出来
+const LOG = path.join(__dirname, 'boot.log');
+function record(line) {
+  try {
+    fs.appendFileSync(LOG, line + '\\n');
+  } catch (e) {
+    // 写不了就算了，别把启动带崩
+  }
+}
+function fmt(args) {
+  return args
+    .map((a) => (a && a.stack ? a.stack : typeof a === 'object' ? JSON.stringify(a) : String(a)))
+    .join(' ');
+}
+
+for (const level of ['log', 'warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    record(new Date().toISOString() + ' [' + level + '] ' + fmt(args));
+    original(...args);
+  };
+}
+
+record('=== ' + new Date().toISOString() + ' ===');
+record('node ' + process.version + ' / ' + process.platform + ' ' + process.arch);
+record('目录 ' + __dirname);
+
+process.on('uncaughtException', (e) => {
+  console.error('未捕获异常:', e);
+});
+process.on('unhandledRejection', (e) => {
+  console.error('未处理的 Promise 拒绝:', e);
+});
+
+process.chdir(__dirname);
 process.env.ROLEPHONE_SQLITE = process.env.ROLEPHONE_SQLITE || 'sqljs';
 process.env.PORT = process.env.PORT || '8787';
 
-console.log('[rolephone] 启动服务：' + __dirname);
-require('./server.js');
+try {
+  require('./server.js');
+  record('server.js 已加载');
+} catch (e) {
+  console.error('server.js 加载失败:', e);
+  throw e;
+}
 `);
 
   // 4. 打成 zip（自己写，免得依赖系统里的 zip 命令）

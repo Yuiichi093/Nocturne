@@ -42,6 +42,7 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private int retryCount = 0;
+    private boolean logShown = false;
     private ValueCallback<Uri[]> fileCallback;
 
     public native Integer startNodeWithArguments(String[] arguments);
@@ -78,10 +79,16 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                // 服务还没起来：等一会儿再试，最多试 40 次（约 20 秒）
-                if (retryCount < 40 && request.isForMainFrame()) {
+                // 服务还没起来：等一会儿再试，最多试 60 次（约 30 秒）
+                if (!request.isForMainFrame()) {
+                    return;
+                }
+                if (retryCount < 60) {
                     view.postDelayed(() -> webView.loadUrl(HOME_URL), 500);
                     retryCount++;
+                } else if (!logShown) {
+                    logShown = true;
+                    showBootLog();
                 }
             }
         });
@@ -112,9 +119,58 @@ public class MainActivity extends Activity {
 
     private void startNode(final String mainJs) {
         new Thread(() -> {
-            int code = startNodeWithArguments(new String[]{"node", mainJs});
+            int code;
+            try {
+                code = startNodeWithArguments(new String[]{"node", mainJs});
+            } catch (Throwable t) {
+                appendLog("node 启动就崩了: " + Log.getStackTraceString(t));
+                code = -1;
+            }
+            appendLog("node 退出，code=" + code);
             Log.i(TAG, "node 退出，code=" + code);
+            runOnUiThread(() -> {
+                if (retryCount >= 60 && !logShown) {
+                    logShown = true;
+                    showBootLog();
+                }
+            });
         }).start();
+    }
+
+    /** 往 boot.log 追加一行（和 main.js 写的同一个文件） */
+    private void appendLog(String line) {
+        File log = new File(new File(getFilesDir(), "nodejs-project"), "boot.log");
+        try (FileOutputStream out = new FileOutputStream(log, true)) {
+            out.write((new java.util.Date().toString() + " [shell] " + line + "\n").getBytes("UTF-8"));
+        } catch (IOException e) {
+            Log.e(TAG, "写日志失败", e);
+        }
+    }
+
+    /** 服务没起来：把 boot.log 摊给用户看，好把错误发出去 */
+    private void showBootLog() {
+        File log = new File(new File(getFilesDir(), "nodejs-project"), "boot.log");
+        StringBuilder sb = new StringBuilder();
+        try {
+            sb.append(new String(java.nio.file.Files.readAllBytes(log.toPath()), "UTF-8"));
+        } catch (Exception e) {
+            sb.append("(读不到 boot.log: ").append(e).append(")");
+        }
+        if (sb.length() == 0) {
+            sb.append("(boot.log 是空的，node 可能根本没跑起来)");
+        }
+        String escaped = sb.toString()
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;");
+        String html = "<!doctype html><meta name=viewport content=\"width=device-width,initial-scale=1\">"
+                + "<body style=\"margin:0;padding:16px;font:13px/1.5 monospace;background:#F2F2F7;color:#1c1c1e\">"
+                + "<h3 style=\"font:600 17px sans-serif;margin:0 0 4px\">服务没有起来</h3>"
+                + "<p style=\"font:13px sans-serif;color:#8e8e93;margin:0 0 12px\">"
+                + "把这个页面截图发给开发者就够了。</p>"
+                + "<pre style=\"white-space:pre-wrap;word-break:break-all;margin:0\">"
+                + escaped + "</pre></body>";
+        webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
     }
 
     @Override

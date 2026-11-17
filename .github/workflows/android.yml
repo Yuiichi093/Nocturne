@@ -5,6 +5,9 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -61,3 +64,15 @@ jobs:
         with:
           name: rolephone-apk
           path: out/*.apk
+
+      # 顺手发一个 Release，手机上点一下就能下载，不用去 Actions 里挖产物
+      - name: 发布到 Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="apk-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" out/*.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "APK $TAG" \
+            --notes "GitHub Actions 自动构建的调试版安装包（debug 签名，可直接安装）。" \
+            --latest
