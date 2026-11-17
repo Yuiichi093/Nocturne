@@ -23,7 +23,7 @@
     btn.textContent = '检查中…';
     setStatus('');
     try {
-      const res = await fetch('/api/update' + (manual ? '?refresh=1' : ''), {
+      const res = await fetch('/api/update' + (manual ? '?refresh=1&debug=1' : ''), {
         cache: 'no-store',
       });
       const data = await res.json();
@@ -31,7 +31,8 @@
         curEl.textContent = data.current;
       }
       if (data.error) {
-        setStatus(data.error);
+        // 手动检查时把服务端的具体原因也露出来，方便定位是 DNS、超时还是被挡
+        setStatus(data.error + (data.detail ? '（' + data.detail.slice(0, 90) + '）' : ''));
         box.hidden = true;
         return;
       }
