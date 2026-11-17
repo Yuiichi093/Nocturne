@@ -39,6 +39,40 @@ function copyDir(src, dest) {
   }
 }
 
+/**
+ * 替换依赖里依赖 ICU 的 Unicode 属性转义。
+ * nodejs-mobile 的 Node 18 没有 ICU 数据，`\p{ID_Start}` 会让整个文件解析失败。
+ * 我们的路由参数都是 ASCII，退化成 ASCII 字符类完全够用。
+ */
+function patchNoIcu(modulesDir) {
+  const targets = [path.join(modulesDir, 'path-to-regexp', 'dist', 'index.js')];
+  let patched = 0;
+  for (const file of targets) {
+    if (!fs.existsSync(file)) {
+      continue;
+    }
+    const original = fs.readFileSync(file, 'utf8');
+    const next = original
+      .replace(/\^\[\$_\\p\{ID_Start\}\]\$/gu, '^[$_A-Za-z]$')
+      .replace(/\^\[\$\\u200c\\u200d\\p\{ID_Continue\}\]\$/gu,
+        '^[$\\u200c\\u200d0-9A-Za-z_]$')
+      .replace(/\^\[\$_\\p\{ID_Start\}\]\[\$\\u200c\\u200d\\p\{ID_Continue\}\]\*\$/gu,
+        '^[$_A-Za-z][$\\u200c\\u200d0-9A-Za-z_]*$');
+    if (next.includes('\\p{ID_')) {
+      console.error('path-to-regexp 还有没替换掉的 Unicode 属性正则，先把 prepare-assets.js 的 patchNoIcu 修一下');
+      process.exit(1);
+    }
+    if (next !== original) {
+      fs.writeFileSync(file, next);
+      patched++;
+      console.log('  已去掉 path-to-regexp 的 ICU 依赖');
+    }
+  }
+  if (!patched) {
+    console.log('  提示：没找到需要打补丁的依赖（版本可能变了）');
+  }
+}
+
 function main() {
   if (!fs.existsSync(path.join(ROOT, 'node_modules'))) {
     console.error('没找到 node_modules，先在仓库根目录 npm install');
@@ -62,6 +96,11 @@ function main() {
 
   // 2. 依赖（跳过测试/文档这类运行时用不上的东西）
   copyDir(path.join(ROOT, 'node_modules'), path.join(STAGE, 'node_modules'));
+
+  // 2.5 nodejs-mobile 自带的 Node 18 是没编 ICU 的，\p{ID_Start} 这种 Unicode
+  //     属性正则会在解析阶段直接抛 SyntaxError（express 5 依赖 path-to-regexp 就中招）。
+  //     这里把这几处正则换成等价的 ASCII 写法，只影响打进 APK 的这份拷贝。
+  patchNoIcu(path.join(STAGE, 'node_modules'));
 
   // 3. 入口
   fs.writeFileSync(path.join(STAGE, 'main.js'), `// 由 prepare-assets.js 生成，不要手改

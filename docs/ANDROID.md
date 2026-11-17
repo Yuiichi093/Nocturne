@@ -74,3 +74,17 @@ android/
 ├── app/src/main/java/.../MainActivity.java  解压 + 起 node + WebView
 └── app/build.gradle         preBuild 里调 prepare-assets.js
 ```
+
+## 踩过的坑
+
+**Node 18 for Android 不带 ICU。** nodejs-mobile 编的 Node 18 没有 ICU 数据，所以
+`\p{ID_Start}` 这类 Unicode 属性正则会在**解析阶段**直接抛
+`SyntaxError: Invalid regular expression ... Invalid property name in character class`。
+express 5 依赖的 `path-to-regexp@8` 第 11 行就用了它，结果就是服务根本起不来。
+`android/prepare-assets.js` 在打包时会把那几行正则替换成等价的 ASCII 写法，
+只影响打进 APK 的那份依赖拷贝，仓库里的 `node_modules` 不动。
+以后再遇到别的 ICU 相关报错，同一个函数里加一条替换即可。
+
+**启动失败要看得到日志。** `main.js` 会把所有 `console.*` 输出追加到
+`files/nodejs-project/boot.log`，`MainActivity` 在重试 60 次（约 30 秒）还没起来时，
+会把这个文件渲染成一个页面显示出来，直接截图就能定位。

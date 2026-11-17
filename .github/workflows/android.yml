@@ -44,6 +44,16 @@ jobs:
           cp -r /tmp/libnode/include android/app/libnode/
           ls -la android/app/libnode/bin/arm64-v8a
 
+      - name: 剥掉 libnode 的调试符号
+        run: |
+          STRIP=$(find "$ANDROID_SDK_ROOT/ndk" -name llvm-strip -path '*linux-x86_64*' | head -1)
+          echo "strip = $STRIP"
+          for f in android/app/libnode/bin/*/libnode.so; do
+            echo "处理 $f"
+            "$STRIP" --strip-unneeded "$f" || echo "剥不了，跳过"
+          done
+          du -h android/app/libnode/bin/*/libnode.so
+
       - name: 装 JS 依赖
         run: npm install --omit=dev
 
