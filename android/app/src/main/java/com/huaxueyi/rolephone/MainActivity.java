@@ -239,7 +239,7 @@ public class MainActivity extends Activity {
                                 blankReloaded = false;
                                 logShown = false;
                                 hideSplash();
-                                BootLog.ready(this);
+                                BootLog.ready(MainActivity.this);
                                 return;
                             }
                             if (!blankReloaded) {
