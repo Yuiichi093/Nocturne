@@ -223,7 +223,16 @@ module.exports = function (app, db) {
 
       try {
         // 先看条目再解压，避免备份包里的 ../ 写到账号目录外面
-        const listing = await execFileAsync('tar', ['-tzf', archive]);
+        let listing = null;
+
+        try {
+          listing = await execFileAsync('tar', ['-tzf', archive]);
+        } catch (tarError) {
+          // 用户传错文件时不要把 tar 的报错和服务器绝对路径回显出来
+          const bad = new Error('这个文件不是有效的 .tar.gz 备份包，换一个再试');
+          bad.badRequest = true;
+          throw bad;
+        }
         assertSafeArchive(listing.stdout);
 
         fs.mkdirSync(extractDir, { recursive: true });

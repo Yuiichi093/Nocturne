@@ -447,16 +447,38 @@
     async function loadEntries() {
       try {
         const response = await fetch('/api/worldbook');
-        entries = await response.json();
+
+        if (!response.ok) {
+          throw new Error('世界书加载失败');
+        }
+
+        const list = await response.json();
+        entries = Array.isArray(list) ? list : [];
         renderCategories();
         renderCategoryOptions();
       } catch (error) {
+        entries = [];
+        // 失败时明确说明「没加载到」，不要伪装成「还没有条目」
         $('categoryList').innerHTML =
-          '<div class="empty">加载失败：' + escapeHtml(error.message) + '</div>';
+          '<div class="empty">加载失败：' + escapeHtml(error.message)
+          + ' <button type="button" id="retryEntriesBtn" style="margin-left:6px;'
+          + 'padding:2px 12px;border:0;border-radius:999px;background:#111;'
+          + 'color:#fff;font:inherit;font-size:13px;">重试</button></div>';
+
+        const retryBtn = $('retryEntriesBtn');
+        if (retryBtn) {
+          retryBtn.addEventListener('click', () => {
+            retryBtn.disabled = true;
+            retryBtn.textContent = '重试中…';
+            loadEntries();
+          });
+        }
       }
     }
 
     function renderCategoryOptions() {
+      if (!Array.isArray(entries)) entries = [];
+
       const categories = Array.from(new Set(
         entries.map((entry) => entry.category || '未分类')
       ));
@@ -594,12 +616,14 @@
     });
 
     $('selectAllBtn').addEventListener('click', () => {
+      if (!Array.isArray(entries)) return;
       entries.forEach((entry) => selectedIds.add(Number(entry.id)));
       renderCategories();
     });
 
     function openCategoryModal() {
       if (!selectedIds.size) return;
+      if (!Array.isArray(entries)) entries = [];
 
       $('categorySelectedCount').textContent =
         '已选 ' + selectedIds.size + ' 条';
@@ -777,7 +801,7 @@
     async function openCopyWorld() {
       try {
         $('copyList').textContent = '加载中...';
-        $('copySelectedIds') && ($('copySelectedIds').value = '');
+        copySelectedIds.clear();
         $('copyStatus').textContent = '';
 
         const response = await fetch('/api/worldbook/other-worlds');

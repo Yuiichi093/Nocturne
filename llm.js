@@ -16,6 +16,7 @@ function buildChatUrl(baseUrl) {
 function getDefaultModel() {
   return db.prepare(`
     SELECT * FROM model_profiles
+    WHERE is_image = 0
     ORDER BY is_default DESC, id DESC
     LIMIT 1
   `).get();
@@ -55,14 +56,26 @@ function parseJsonLoose(text) {
   return null;
 }
 
-async function callModel(options) {
-  const opts = options || {};
-  const modelRow = opts.modelRow || getDefaultModel();
+// 不同服务商的返回长得不太一样：content 可能是字符串，也可能是
+// [{type:'text', text:'…'}] 这种数组；有些老接口直接给 text 字段。
+function extractContent(message, choice) {
+  const raw = message.content ?? choice.text ?? '';
 
-  if (!modelRow) {
-    throw new Error('还没有配置模型 API');
+  if (Array.isArray(raw)) {
+    return raw
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part.text === 'string') return part.text;
+        if (part && typeof part.content === 'string') return part.content;
+        return '';
+      })
+      .join('');
   }
 
+  return String(raw || '');
+}
+
+function buildChatHeaders(modelRow) {
   const headers = {
     'Content-Type': 'application/json',
     ...parseExtraHeaders(modelRow.extra_headers)
@@ -70,6 +83,137 @@ async function callModel(options) {
 
   if (!headers.Authorization && !headers.authorization) {
     headers.Authorization = 'Bearer ' + modelRow.api_key;
+  }
+
+  return headers;
+}
+
+function emptyContentError(choice, message, text) {
+  const reasoning = String(
+    message.reasoning_content || message.reasoning || ''
+  ).trim();
+  const finish = String(choice.finish_reason || '');
+
+  if (reasoning && finish === 'length') {
+    return new Error(
+      '模型把输出额度都用在思考上了，没写出正文。换一个非推理模型，' +
+      '或者在「模型设置」里把这个模型的输出上限调大一点'
+    );
+  }
+
+  if (reasoning) {
+    return new Error('模型只返回了思考过程，没给正文，再试一次或者换个模型');
+  }
+
+  if (!choice || (!choice.message && !choice.text)) {
+    return new Error('模型返回的格式看不懂：' + String(text).slice(0, 120));
+  }
+
+  return new Error('模型返回了空内容');
+}
+
+/**
+ * 统一发一次 chat/completions，返回 { data, text, content, started }。
+ *
+ * 各调用方（聊天、剧场旁白、自动写画面描述）原来各写一份 fetch，
+ * 遇到推理模型把 max_tokens 花在思考上、正文为空时全都只会报「空内容」。
+ * 这里集中处理：正文空就把额度翻三倍重试（最多三次），还是空再报人话。
+ */
+async function requestChat(modelRow, payload, options) {
+  const opts = options || {};
+  const retries = opts.retries === undefined ? 2 : Number(opts.retries);
+  let maxTokens = Number(payload.max_tokens) || 400;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const body = { ...payload, max_tokens: maxTokens };
+    const started = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      Number(opts.timeoutMs || 60000)
+    );
+    let text = '';
+
+    try {
+      const response = await fetch(buildChatUrl(modelRow.base_url), {
+        method: 'POST',
+        headers: buildChatHeaders(modelRow),
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+
+      text = await response.text();
+
+      if (!response.ok) {
+        const error = new Error('模型接口返回错误：' + text.slice(0, 500));
+        error.status = 502;
+        error.raw = text;
+        throw error;
+      }
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        const timeout = new Error('模型调用超时，等一会儿再试');
+        timeout.status = 504;
+        throw timeout;
+      }
+
+      // 网络层直接挂掉（DNS、连不上、连接被重置）也归到「上游不可用」，
+      // 别让调用方把 500 当成自己的 bug
+      if (!error.status) {
+        const failed = new Error(
+          '连不上模型服务：' + (error.message || '网络错误')
+        );
+        failed.status = 502;
+        throw failed;
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    let data = null;
+
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error('模型返回的不是合法 JSON：' + String(text).slice(0, 120));
+    }
+
+    const choice = (data && data.choices && data.choices[0]) || {};
+    const message = choice.message || {};
+    const content = extractContent(message, choice).trim();
+
+    if (content) {
+      return { data, text, content, choice, started };
+    }
+
+    lastError = emptyContentError(choice, message, text);
+
+    const finish = String(choice.finish_reason || '');
+    const hasReasoning = Boolean(
+      message.reasoning_content || message.reasoning
+    );
+
+    // 额度被思考吃光：翻倍再来，正文通常就有了
+    if ((finish === 'length' || hasReasoning) && attempt < retries) {
+      maxTokens = Math.min(12000, Math.max(1200, maxTokens * 3));
+      continue;
+    }
+
+    throw lastError;
+  }
+
+  throw lastError || new Error('模型返回了空内容');
+}
+
+async function callModel(options) {
+  const opts = options || {};
+  const modelRow = opts.modelRow || getDefaultModel();
+
+  if (!modelRow) {
+    throw new Error('还没有配置模型 API');
   }
 
   const payload = {
@@ -82,55 +226,19 @@ async function callModel(options) {
     max_tokens: Number(opts.maxTokens ?? 400)
   };
 
-  const started = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Number(opts.timeoutMs || 60000));
+  const result = await requestChat(modelRow, payload, {
+    timeoutMs: opts.timeoutMs
+  });
 
-  try {
-    const response = await fetch(buildChatUrl(modelRow.base_url), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-
-    const text = await response.text();
-
-    if (!response.ok) {
-      throw new Error('模型接口返回错误：' + text.slice(0, 500));
+  return {
+    content: result.content,
+    meta: {
+      provider: modelRow.name,
+      model: modelRow.model,
+      usage: (result.data && result.data.usage) || null,
+      latency_ms: Date.now() - result.started
     }
-
-    let data = null;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      throw new Error('模型返回的不是合法 JSON');
-    }
-
-    const content = String(data && data.choices && data.choices[0] &&
-      data.choices[0].message && data.choices[0].message.content || '').trim();
-
-    if (!content) {
-      throw new Error('模型返回了空内容');
-    }
-
-    return {
-      content,
-      meta: {
-        provider: modelRow.name,
-        model: modelRow.model,
-        usage: data.usage || null,
-        latency_ms: Date.now() - started
-      }
-    };
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error('模型调用超时');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  };
 }
 
 // ---- 看图（视觉模型） ----
@@ -357,6 +465,9 @@ async function describeImage(options) {
 
 module.exports = {
   callModel,
+  requestChat,
+  buildChatHeaders,
+  extractContent,
   getVisionModel,
   describeImage,
   imageToDataUrl,

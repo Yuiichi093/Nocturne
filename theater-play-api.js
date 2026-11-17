@@ -1,7 +1,7 @@
 const { getActiveWorldId } = require('./worlds');
 const { getWorldbookContext } = require('./worldbook');
 const { getCalendarContext } = require('./calendar-context');
-const { callModel } = require('./llm');
+const { callModel, requestChat } = require('./llm');
 
 module.exports = function (app, db) {
   function cleanText(value) {
@@ -242,7 +242,7 @@ module.exports = function (app, db) {
       system,
       user,
       temperature: 0.9,
-      maxTokens: 400,
+      maxTokens: 800,
       timeoutMs: 60000
     });
 
@@ -267,16 +267,22 @@ module.exports = function (app, db) {
     return text.slice(0, 300);
   }
 
-  // 服务端内部调 /api/generate-image：复用它的模型选择、参考图和 base64 落盘逻辑
-  async function requestTheaterImage(payload) {
+  // 服务端内部调 /api/generate-image：复用它的模型选择、参考图和 base64 落盘逻辑。
+  // 这是打自己进程的 HTTP 请求，会再过一遍登录守卫，所以要把当前用户的 cookie 带上，
+  // 不然内部请求拿到的是 401「未登录」。
+  async function requestTheaterImage(payload, cookie) {
     const url = 'http://127.0.0.1:' + localPort() + '/api/generate-image';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 240000);
 
+    const headers = { 'Content-Type': 'application/json' };
+
+    if (cookie) headers.Cookie = cookie;
+
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(payload),
         signal: controller.signal
       });
@@ -379,6 +385,7 @@ module.exports = function (app, db) {
 
     const modelRow = db.prepare(`
       SELECT * FROM model_profiles
+      WHERE is_image = 0
       ORDER BY is_default DESC, id DESC
       LIMIT 1
     `).get();
@@ -510,6 +517,7 @@ module.exports = function (app, db) {
     // 否则没配模型时会把这句话白白留在剧情里
     const modelRow = db.prepare(`
       SELECT * FROM model_profiles
+      WHERE is_image = 0
       ORDER BY is_default DESC, id DESC
       LIMIT 1
     `).get();
@@ -662,16 +670,6 @@ module.exports = function (app, db) {
       content: '格式提醒：本次回复必须包含【旁白】和【选项】两部分，【选项】下面必须有 A/B/C/D 四行，不能省略标记。'
     });
 
-    const extraHeaders = safeJsonParse(modelRow.extra_headers, {});
-    const headers = {
-      'Content-Type': 'application/json',
-      ...extraHeaders
-    };
-
-    if (!headers.Authorization && !headers.authorization) {
-      headers.Authorization = 'Bearer ' + modelRow.api_key;
-    }
-
     const payload = {
       model: modelRow.model,
       messages,
@@ -681,39 +679,12 @@ module.exports = function (app, db) {
     payload.max_tokens = Math.max(Number(modelRow.max_tokens) || 0, 3000);
 
     const started = Date.now();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90000);
 
     try {
-      const response = await fetch(buildChatUrl(modelRow.base_url), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-        signal: controller.signal
+      // 推理模型会把额度花在思考上、正文为空，requestChat 里会自动翻额度重试
+      const { content: rawReply, data } = await requestChat(modelRow, payload, {
+        timeoutMs: 90000
       });
-
-      const text = await response.text();
-
-      if (!response.ok) {
-        return res.status(502).json({ error: text.slice(0, 1200) });
-      }
-
-      let data = null;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {}
-
-      const rawReply = String(
-        data?.choices?.[0]?.message?.content || ''
-      ).trim();
-
-      console.log('=== THEATER RAW REPLY ===');
-      console.log(rawReply);
-      console.log('=== END THEATER RAW ===');
-
-      if (!rawReply) {
-        return res.status(502).json({ error: '模型返回了空内容' });
-      }
 
       const parsed = parseTheaterJson(rawReply);
 
@@ -794,11 +765,10 @@ module.exports = function (app, db) {
           .get(Number(optionsResult.lastInsertRowid))
       });
     } catch (error) {
-      res.status(500).json({
+      // requestChat 已经把人话写进 message 了，这里原样带出去
+      res.status(error.status || 500).json({
         error: error.name === 'AbortError' ? '剧场生成超时' : error.message
       });
-    } finally {
-      clearTimeout(timer);
     }
   });
   // 给当前这一幕生成一张插画，作为一条带图消息进对话流
@@ -875,7 +845,7 @@ module.exports = function (app, db) {
         size,
         character_id: characterId || undefined,
         model_id: Number(body.model_id || 0) || undefined
-      });
+      }, req.headers.cookie);
     } catch (error) {
       return res.status(502).json({ error: error.message });
     }

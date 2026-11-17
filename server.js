@@ -42,7 +42,9 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith('image/')) {
-      return cb(new Error('只允许上传图片'));
+      const error = new Error('只允许上传图片');
+      error.status = 415;
+      return cb(error);
     }
     cb(null, true);
   }
@@ -877,9 +879,25 @@ app.delete('/api/characters/:id', (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// 客户端错误（传错文件、body 太大、JSON 写坏了）不该报成 500，
+// 也不能把 express 的原始报错原文直接甩到前端。
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: err.message || '服务器错误' });
+  const status = Number(err.status || err.statusCode) ||
+    (err.code === 'LIMIT_FILE_SIZE' ||
+      err.type === 'entity.too.large' ? 413 :
+      err.type === 'entity.parse.failed' ? 400 : 500);
+
+  const friendly = {
+    400: '请求格式不对',
+    413: '文件太大了，换个小一点的',
+    415: err.message || '只允许上传图片'
+  };
+
+  if (status >= 500) console.error(err);
+
+  res.status(status).json({
+    error: status >= 500 ? (err.message || '服务器错误') : (friendly[status] || err.message)
+  });
 });
 
 // 定时备份：服务跑着的时候每天自动给数据库留一份快照，保留最近 7 份。

@@ -319,6 +319,49 @@
     $('messages').appendChild(row);
   }
 
+  // 加载失败时的可重试提示：本地服务被回收、接口 500 都走这里。
+  // 不留白，也不弹 alert（alert 会打断输入）。
+  function showLoadError(message, onRetry) {
+    const box = $('messages');
+    if (!box) return;
+    box.innerHTML = '';
+
+    // 标题栏还停在「加载中...」的话一并收尾，别一半失败一半加载中
+    const nameEl = $('chatName');
+    if (nameEl && nameEl.textContent === '加载中...') {
+      nameEl.textContent = '加载失败';
+    }
+
+    const row = document.createElement('div');
+    row.className = 'message-row system';
+    row.style.cssText =
+      'display:block;padding:28px 16px;text-align:center;' +
+      'color:#8a8a8a;font-size:14px;line-height:1.9;';
+
+    const text = document.createElement('div');
+    text.textContent = '加载失败：' + (message || '连不上服务') + '。';
+    row.appendChild(text);
+
+    if (typeof onRetry === 'function') {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = '重试';
+      button.style.cssText =
+        'margin-top:10px;padding:6px 18px;border:0;border-radius:999px;' +
+        'background:#111;color:#fff;font:inherit;font-size:13px;';
+      button.addEventListener('click', () => {
+        button.disabled = true;
+        button.textContent = '重试中…';
+        Promise.resolve()
+          .then(onRetry)
+          .catch((error) => showLoadError(error && error.message, onRetry));
+      });
+      row.appendChild(button);
+    }
+
+    box.appendChild(row);
+  }
+
   function scrollToBottom() {
     $('messages').scrollTop = $('messages').scrollHeight;
   }
@@ -359,23 +402,45 @@
   }
 
   async function loadCharacter() {
-    const response = await fetch('/api/characters/' + characterId);
-    character = await response.json();
+    let data;
 
-    if (!response.ok) {
-      alert(character.error || '角色不存在');
-      location.href = '/';
-      return;
+    try {
+      const response = await fetch('/api/characters/' + characterId);
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+
+        if (response.status === 404) {
+          // 角色真的不存在：回首页才是对的
+          alert(body.error || '角色不存在');
+          location.href = '/';
+          return false;
+        }
+
+        throw new Error(body.error || '角色加载失败');
+      }
+
+      data = await response.json();
+    } catch (error) {
+      // 断网 / 服务没起来：留在当前页，给出可重试的提示
+      showLoadError(error.message, boot);
+      return false;
     }
+
+    character = data;
 
     $('chatName').textContent = character.name;
 
     updateHeaderSub();
     updateMenu();
     document.title = 'Nocturne · ' + character.name;
+
+    return true;
   }
 
   function updateHeaderSub() {
+    if (!character) return;
+
     const persona = personas.find(
       (item) => Number(item.id) === Number(character.user_persona_id)
     );
@@ -386,16 +451,33 @@
   }
 
   async function loadPersonas() {
-    const response = await fetch('/api/personas');
-    personas = await response.json();
+    try {
+      const response = await fetch('/api/personas');
+
+      if (!response.ok) {
+        throw new Error('人设列表加载失败');
+      }
+
+      const list = await response.json();
+      personas = Array.isArray(list) ? list : [];
+    } catch (error) {
+      // 人设只是下拉选项，加载失败不该拖垮聊天记录
+      personas = [];
+      console.warn('人设加载失败：' + error.message);
+    }
+
     fillPersonaSelect();
     updateHeaderSub();
   }
 
   function fillPersonaSelect() {
     const select = $('personaSelect');
+    if (!select) return;
+
     select.innerHTML =
       '<option value="0">不绑定，使用默认用户人设</option>';
+
+    if (!Array.isArray(personas)) personas = [];
 
     personas.forEach((item) => {
       const option = document.createElement('option');
@@ -405,15 +487,31 @@
       select.appendChild(option);
     });
 
-    select.value = String(character.user_persona_id || 0);
+    select.value = String(character ? character.user_persona_id || 0 : 0);
   }
 
   async function loadMessages() {
-    const response = await fetch(
-      '/api/characters/' + characterId + '/messages'
-    );
-    messageRows = await response.json();
+    let rows;
+
+    try {
+      const response = await fetch(
+        '/api/characters/' + characterId + '/messages'
+      );
+
+      if (!response.ok) {
+        throw new Error('聊天记录加载失败');
+      }
+
+      rows = await response.json();
+    } catch (error) {
+      messageRows = [];
+      showLoadError(error.message, loadMessages);
+      return false;
+    }
+
+    messageRows = Array.isArray(rows) ? rows : [];
     renderMessages();
+    return true;
   }
 
   // 记录“对方正在输入…”出现前的副标题，用于恢复
@@ -933,7 +1031,17 @@
     closeNarration
   };
 
-  loadCharacter()
-    .then(loadPersonas)
-    .then(loadMessages);
+  // 启动链：角色 → 人设 → 消息。每一步都自带兜底，任何一步失败都不能
+  // 让后面的步骤被吞掉（之前 personas 一出错，聊天记录就永远不加载）。
+  async function boot() {
+    const characterReady = await loadCharacter();
+    if (!characterReady) return;
+
+    await loadPersonas();
+    await loadMessages();
+  }
+
+  boot().catch((error) => {
+    showLoadError(error && error.message, boot);
+  });
 })();

@@ -290,6 +290,12 @@ module.exports = function (app, db) {
 
     saveSetting('moments_cover', cover);
 
+    // 老版本按世界存过封面。这里写完全局键就把老键清掉，
+    // 否则用户「清空封面」后 readCover 会回退到老键，旧图又冒出来。
+    try {
+      db.prepare("DELETE FROM app_settings WHERE key LIKE 'moments_cover_%'").run();
+    } catch (e) {}
+
     res.json({ ok: true, cover });
   });
 
@@ -435,11 +441,24 @@ module.exports = function (app, db) {
 
   // 手动触发一次自动发布（调试 / 想让角色现在就发一条时用）
   app.post('/api/moments/auto/run', async (req, res) => {
+    // 没配文本模型时这是用户侧的问题，不该报 500（同族接口都是 400）
+    const hasTextModel = db.prepare(`
+      SELECT id FROM model_profiles
+      WHERE is_image = 0
+      LIMIT 1
+    `).get();
+
+    if (!hasTextModel) {
+      return res.status(400).json({
+        error: '还没有配置文本模型，先去「模型 API」里加一个'
+      });
+    }
+
     try {
       const result = await momentAi.runAutoTick(true);
       res.json(result);
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(error.status || 500).json({ error: error.message });
     }
   });
 
@@ -463,6 +482,7 @@ module.exports = function (app, db) {
 
     const modelRow = db.prepare(`
       SELECT * FROM model_profiles
+      WHERE is_image = 0
       ORDER BY is_default DESC, id DESC
       LIMIT 1
     `).get();

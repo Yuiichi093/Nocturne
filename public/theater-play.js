@@ -64,18 +64,76 @@
     $('story').scrollTop = $('story').scrollHeight;
   }
 
-  async function loadAll() {
-    const response = await fetch('/api/theater/sessions/' + sessionId);
-    const data = await response.json();
+  // 加载失败时就地给提示 + 重试，别让页面永远停在「加载中...」
+  function showStoryError(message, onRetry) {
+    const story = $('story');
+    if (story) {
+      story.innerHTML = '';
 
-    if (!response.ok) {
-      alert(data.error || '剧场会话不存在');
-      location.href = '/theater.html';
-      return;
+      const box = document.createElement('div');
+      box.className = 'narration-block';
+      box.style.cssText = 'text-align:center;color:#8a8a8a;line-height:1.9;';
+      box.textContent = '加载失败：' + (message || '连不上服务') + '。';
+
+      if (typeof onRetry === 'function') {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = '重试';
+        button.style.cssText =
+          'display:block;margin:12px auto 0;padding:6px 18px;border:0;' +
+          'border-radius:999px;background:#111;color:#fff;font:inherit;font-size:13px;';
+        button.addEventListener('click', () => {
+          button.disabled = true;
+          button.textContent = '重试中…';
+          Promise.resolve()
+            .then(onRetry)
+            .catch((error) => showStoryError(error && error.message, onRetry));
+        });
+        box.appendChild(button);
+      }
+
+      story.appendChild(box);
+    }
+
+    const title = $('scriptTitle');
+    if (title && title.textContent === '加载中...') {
+      title.textContent = '加载失败';
+    }
+  }
+
+  async function loadAll() {
+    let data;
+
+    try {
+      const response = await fetch('/api/theater/sessions/' + sessionId);
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+
+        if (response.status === 404) {
+          // 会话真的不存在：回剧场列表是对的
+          alert(body.error || '剧场会话不存在');
+          location.href = '/theater.html';
+          return false;
+        }
+
+        throw new Error(body.error || '剧场加载失败');
+      }
+
+      data = await response.json();
+    } catch (error) {
+      // 断网 / 服务被回收：留在当前页，给出可重试的提示
+      showStoryError(error.message, loadAll);
+      return false;
     }
 
     session = data.session;
     script = data.script;
+
+    if (!session || !script) {
+      showStoryError('这个剧本已经不在了', null);
+      return false;
+    }
 
     $('scriptTitle').textContent = script.title;
     $('scriptSubtitle').textContent = script.subtitle || '初始副本';
@@ -86,10 +144,23 @@
       : [];
 
     if (castIds.length) {
-      const castResponse = await fetch('/api/characters');
-      const allCharacters = await castResponse.json();
+      try {
+        const castResponse = await fetch('/api/characters');
 
-      cast = allCharacters.filter((item) => castIds.includes(Number(item.id)));
+        if (!castResponse.ok) {
+          throw new Error('角色列表加载失败');
+        }
+
+        const allCharacters = await castResponse.json();
+
+        cast = Array.isArray(allCharacters)
+          ? allCharacters.filter((item) => castIds.includes(Number(item.id)))
+          : [];
+      } catch (error) {
+        // 阵容只影响头像/名字显示，失败不该挡住剧情
+        cast = [];
+        console.warn('剧场阵容加载失败：' + error.message);
+      }
     } else {
       cast = [];
     }
@@ -97,14 +168,31 @@
     await renderChapters();
     renderInfo();
     await loadMessages();
+    return true;
   }
 
   async function loadMessages() {
-    const response = await fetch(
-      '/api/theater/sessions/' + sessionId + '/messages'
-    );
-    messages = await response.json();
+    let rows;
+
+    try {
+      const response = await fetch(
+        '/api/theater/sessions/' + sessionId + '/messages'
+      );
+
+      if (!response.ok) {
+        throw new Error('剧情加载失败');
+      }
+
+      rows = await response.json();
+    } catch (error) {
+      messages = [];
+      showStoryError(error.message, loadMessages);
+      return false;
+    }
+
+    messages = Array.isArray(rows) ? rows : [];
     renderStory();
+    return true;
   }
 
   function renderStory() {
@@ -813,5 +901,7 @@
 
   $('sheetBackdrop').addEventListener('click', closeSheets);
 
-  loadAll();
+  loadAll().catch((error) => {
+    showStoryError(error && error.message, loadAll);
+  });
 })();

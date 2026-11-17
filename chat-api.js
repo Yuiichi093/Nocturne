@@ -7,7 +7,7 @@ module.exports = function (app, db) {
   const { getActiveWorldId } = require('./worlds');
 const { getWorldbookContext, getWorldbookContextByNames } = require('./worldbook');
 const { getCalendarContext } = require('./calendar-context');
-const { describeImage } = require('./llm');
+const { describeImage, requestChat } = require('./llm');
 
   const DEFAULT_CHAT_STYLE = `【全局聊天风格】
 你是在用手机和用户聊天，不是在写小说。
@@ -506,6 +506,7 @@ const { describeImage } = require('./llm');
 
     const modelRow = db.prepare(`
       SELECT * FROM model_profiles
+      WHERE is_image = 0
       ORDER BY is_default DESC, id DESC
       LIMIT 1
     `).get();
@@ -678,46 +679,12 @@ const { describeImage } = require('./llm');
           : baseTemperature;
 
         const attemptStarted = Date.now();
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 60000);
 
-        let text = '';
-
-        try {
-          const response = await fetch(buildChatUrl(modelRow.base_url), {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(payload),
-            signal: controller.signal
-          });
-
-          text = await response.text();
-
-          if (!response.ok) {
-            const modelError = new Error(text.slice(0, 1000));
-            modelError.status = 502;
-            throw modelError;
-          }
-        } finally {
-          clearTimeout(timer);
-        }
-
-        let data = null;
-
-        try {
-          data = JSON.parse(text);
-        } catch (e) {}
-
-        const rawReply = String(
-          data && data.choices && data.choices[0] &&
-          data.choices[0].message && data.choices[0].message.content || ''
-        ).trim();
-
-        if (!rawReply) {
-          const emptyError = new Error('模型返回了空内容');
-          emptyError.status = 502;
-          throw emptyError;
-        }
+        // requestChat 里已处理：推理模型把额度花在思考上、正文为空时自动重试；
+        // 返回非 2xx 会抛出带 status=502 的错误，直接交给外层 catch。
+        const { data, content: rawReply } = await requestChat(modelRow, payload, {
+          timeoutMs: 60000
+        });
 
         let parsedReply = parseChatReply(rawReply);
 

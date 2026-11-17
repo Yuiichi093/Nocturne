@@ -249,10 +249,18 @@
       avatar.textContent = String(user.name || '我').slice(0, 1);
     }
 
+    applyCover();
+  }
+
+  // 封面单独画，别等用户信息和动态都拿到才画
+  function applyCover() {
+    const cover = $('momentsCover');
+    if (!cover) return;
+
     if (coverUrl) {
-      $('momentsCover').style.backgroundImage = 'url("' + coverUrl + '")';
+      cover.style.backgroundImage = 'url("' + coverUrl + '")';
     } else {
-      $('momentsCover').style.backgroundImage = '';
+      cover.style.backgroundImage = '';
     }
   }
 
@@ -390,31 +398,44 @@
   }
 
   async function loadAll() {
-    const [momentsData, settings, personasData, , profileData] =
-      await Promise.all([
-        safeJson('/api/moments'),
-        safeJson('/api/moments/settings'),
-        safeJson('/api/personas'),
-        safeJson('/api/worlds/active'),
-        safeJson('/api/profile')
-      ]);
+    // 谁先回来谁先画：封面、用户信息、动态互不等待。
+    // 以前是一把 Promise.all，任何一个接口慢或者报错，
+    // 整页就停在「我 / 写一句签名」的默认样子，看着像功能坏了。
+    const settingsReq = safeJson('/api/moments/settings');
+    const profileReq = safeJson('/api/profile');
+    const personasReq = safeJson('/api/personas');
+    const momentsReq = safeJson('/api/moments');
 
-    if (Array.isArray(momentsData)) moments = momentsData;
-
+    const settings = await settingsReq;
     if (settings && typeof settings.cover === 'string') {
       coverUrl = settings.cover;
     }
+    applyCover();
 
+    const profileData = await profileReq;
+    if (profileData && !profileData.error) localProfile = profileData;
+    renderHeader();
+
+    const personasData = await personasReq;
     if (Array.isArray(personasData)) {
       userPersona = personasData.find((item) => Number(item.is_default) === 1) ||
         personasData[0] ||
         null;
+      renderHeader();
     }
 
-    if (profileData && !profileData.error) localProfile = profileData;
+    const momentsData = await momentsReq;
+    if (Array.isArray(momentsData)) {
+      moments = momentsData;
+      renderFeed();
+    } else {
+      const feed = $('momentsFeed');
+      if (feed) {
+        feed.innerHTML =
+          '<div class="moments-empty">动态加载失败，下拉或者重进这一页再试试。</div>';
+      }
+    }
 
-    renderHeader();
-    renderFeed();
     await loadNotifications();
   }
 
