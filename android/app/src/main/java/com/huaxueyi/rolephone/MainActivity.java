@@ -78,6 +78,7 @@ public class MainActivity extends Activity {
     }
 
     private static boolean nodeStarted = false;
+    private static int nodeRetries = 0;
 
     private FrameLayout rootLayout;
     private TextView splashView;
@@ -89,7 +90,8 @@ public class MainActivity extends Activity {
     private boolean pageReady = false;
     private ValueCallback<Uri[]> fileCallback;
 
-    public native Integer startNodeWithArguments(String[] arguments);
+    // 原生那边返回的是 jint，这里必须声明成 int，否则 node 一退出就会拆箱崩成 NPE
+    public native int startNodeWithArguments(String[] arguments);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -125,12 +127,14 @@ public class MainActivity extends Activity {
                 appendLog("[shell] 解包失败: " + e);
             }
             final String mainJs = new File(projectDir, "main.js").getAbsolutePath();
-            startNode(mainJs);
+            // 先把 WebView 挂上（它自己有重试），再去起 node。
+            // 以前是等 startNode 返回后才挂，node 一直不返回的话这一屏就永远出不来。
             runOnUiThread(() -> {
                 if (!isFinishing() && !isDestroyed()) {
                     installWebView();
                 }
             });
+            startNode(mainJs);
         }, "prepare-project").start();
     }
 
@@ -681,6 +685,7 @@ public class MainActivity extends Activity {
 
     private void startNode(final String mainJs) {
         new Thread(() -> {
+            final long startedAt = System.currentTimeMillis();
             int code;
             try {
                 code = startNodeWithArguments(new String[]{"node", mainJs});
@@ -688,9 +693,21 @@ public class MainActivity extends Activity {
                 appendLog("node 启动就崩了: " + Log.getStackTraceString(t));
                 code = -1;
             }
-            appendLog("node 退出，code=" + code);
-            nodeStarted = false;
+            appendLog("node 退出，code=" + code + "，跑了 " + (System.currentTimeMillis() - startedAt) + " 毫秒");
             Log.i(TAG, "node 退出，code=" + code);
+            if (!pageReady && nodeRetries < 1) {
+                // node 刚起就退了：再拉一次，能扛过一次偶发的启动失败
+                nodeRetries++;
+                appendLog("node 退出得太早，重试第 " + nodeRetries + " 次");
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {
+                }
+                nodeStarted = false;
+                startNode(mainJs);
+                return;
+            }
+            nodeStarted = false;
             runOnUiThread(() -> {
                 if (!pageReady && !logShown) {
                     logShown = true;

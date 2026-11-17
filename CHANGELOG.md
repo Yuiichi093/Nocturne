@@ -3,6 +3,13 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号按 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.3] - 2026-11-18
+
+### 修复
+- 1.2.2 升级后打开是「页面没有正常显示」：node 进程退出时 Java 侧取原始返回值会拆箱崩成 NPE，
+  而且 WebView 要等 node 退出后才挂上，等于一直在等一个不会返回的调用。
+  现在 WebView 先挂上自己重试，原生方法签名改成 int，node 早退还会自动重拉一次。
+
 ## [1.2.2] - 2026-11-18
 
 ### 修复
