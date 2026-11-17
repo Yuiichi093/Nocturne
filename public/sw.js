@@ -6,7 +6,7 @@
 //     所以只缓存「200、没被重定向、不是登录页」的导航响应。
 //  2) 离线兜底必须一定返回一个 Response。之前 caches.match 找不到就是 undefined，
 //     respondWith(undefined) 会抛 TypeError，WebView 直接一片白。
-const VERSION = 'nocturne-v2';
+const VERSION = 'nocturne-v3';
 const OFFLINE_URL = '/offline.html';
 const SHELL = [
   '/manifest.json',
@@ -76,19 +76,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 静态资源：缓存优先，后台顺手更新
+  // 静态资源：先网络，拿到就顺手更新缓存；断网时回退缓存。
+  // 以前是「缓存优先」，结果装上新 APK 后 WebView 还在跑上一版 JS，
+  // 页面上就会出现「改了没反应」的怪事，所以改成网络优先。
   event.respondWith(
-    caches.match(request).then((hit) => {
-      const network = fetch(request)
-        .then((response) => {
-          if (cacheable(response)) {
-            const copy = response.clone();
-            caches.open(VERSION).then((cache) => cache.put(request, copy)).catch(() => {});
-          }
-          return response;
-        })
-        .catch(() => hit || offlineResponse());
-      return hit || network;
-    })
+    fetch(request)
+      .then((response) => {
+        if (cacheable(response)) {
+          const copy = response.clone();
+          caches.open(VERSION).then((cache) => cache.put(request, copy)).catch(() => {});
+        }
+        return response;
+      })
+      .catch(() => caches.match(request).then((hit) => hit || offlineResponse()))
   );
 });

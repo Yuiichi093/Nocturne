@@ -89,11 +89,71 @@ app.use((req, res, next) => {
   next();
 });
 
+// 图片到底是不是图片，得看文件头，不能听客户端报的 mimetype。
+// 手机相机的 HEIC 也会报成 image/*，存下来浏览器根本解不出来，
+// 表现就是「图传上去了但哪儿都不显示」，而且一点报错都没有。
+function sniffImageExt(filePath) {
+  let head;
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    head = Buffer.alloc(16);
+    fs.readSync(fd, head, 0, 16, 0);
+    fs.closeSync(fd);
+  } catch (e) {
+    return null;
+  }
+
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'jpg';
+  if (head.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
+  if (head.slice(0, 3).toString('latin1') === 'GIF') return 'gif';
+  if (head.slice(0, 4).toString('latin1') === 'RIFF' &&
+      head.slice(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return null;
+}
+
+function isHeic(filePath) {
+  let head;
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    head = Buffer.alloc(32);
+    fs.readSync(fd, head, 0, 32, 0);
+    fs.closeSync(fd);
+  } catch (e) {
+    return false;
+  }
+  const brand = head.slice(8, 32).toString('latin1');
+  return /heic|heix|hevc|heim|heis|mif1|msf1/.test(brand);
+}
+
 app.post('/api/upload', upload.single('image'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: '没有收到图片' });
   }
-  res.json({ url: '/uploads/' + req.file.filename });
+
+  const ext = sniffImageExt(req.file.path);
+
+  if (!ext) {
+    const heic = isHeic(req.file.path);
+    try { fs.unlinkSync(req.file.path); } catch (e) {}
+
+    return res.status(400).json({
+      error: heic
+        ? '这张图是 HEIC 格式，浏览器显示不了，先转成 JPG 或 PNG 再传吧'
+        : '这个文件看着不是图片，换个 JPG / PNG / WEBP 试试'
+    });
+  }
+
+  // 扩展名按真实格式来，免得 jpeg 的头配个 .png 的名字
+  let filename = req.file.filename;
+  if (!filename.toLowerCase().endsWith('.' + ext)) {
+    const renamed = filename.replace(/\.[^.]*$/, '.' + ext);
+    try {
+      fs.renameSync(req.file.path, path.join(path.dirname(req.file.path), renamed));
+      filename = renamed;
+    } catch (e) {}
+  }
+
+  res.json({ url: '/uploads/' + filename });
 });
 
 app.get('/api/health', (req, res) => {

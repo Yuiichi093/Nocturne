@@ -301,11 +301,15 @@
         const response = await fetch('/api/worlds');
         const rows = await response.json();
 
+        if (!response.ok || !Array.isArray(rows)) {
+          throw new Error((rows && rows.error) || '读取世界观失败');
+        }
+
         const active = rows.find((item) => item.is_active);
 
         if (active) {
           $('activeWorld').innerHTML = `
-            <div>
+            <div data-edit="${active.id}">
               <h2>${escapeHtml(active.name)}<span class="active-label">当前</span></h2>
               <p>${escapeHtml(active.description || '没有描述')}</p>
             </div>
@@ -316,7 +320,7 @@
         }
 
         $('worldList').innerHTML = rows.map((row) => `
-          <div class="world-card ${row.is_active ? 'active' : ''}">
+          <div class="world-card ${row.is_active ? 'active' : ''}" ${row.is_active ? `data-edit="${row.id}"` : `data-switch="${row.id}"`}>
             <div>
               <h2>${escapeHtml(row.name)}</h2>
               <p>${escapeHtml(row.description || '没有描述')}</p>
@@ -332,7 +336,11 @@
           </div>
         `).join('');
       } catch (error) {
-        $('worldList').textContent = '加载失败：' + error.message;
+        $('worldList').innerHTML =
+          '<div class="world-empty">加载失败：' + escapeHtml(error.message) + '</div>' +
+          '<button class="ghost-btn" id="worldsRetry" type="button">重试</button>';
+        const retry = $('worldsRetry');
+        if (retry) retry.addEventListener('click', loadWorlds);
       }
     }
 
@@ -422,13 +430,18 @@
     });
 
     function handleWorldClick(event) {
-      const editId = event.target.dataset.edit;
+      // 以前只认按钮本身，点世界名/描述这类文字区域完全没反应，
+      // 现在往上找最近的带 data 的元素，整张卡片都能点。
+      const hit = event.target.closest('[data-edit], [data-switch]');
+      if (!hit) return;
+
+      const editId = hit.dataset.edit;
       if (editId) {
         openEdit(editId);
         return;
       }
 
-      const id = event.target.dataset.switch;
+      const id = hit.dataset.switch;
       if (!id) return;
 
       switchWorld(id).catch((error) => {
