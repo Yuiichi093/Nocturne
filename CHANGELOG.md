@@ -7,6 +7,22 @@
 
 ### 新增
 
+- **PWA**：`public/manifest.json` + service worker + 三套图标。手机浏览器打开服务后
+  可以「添加到主屏幕」，独立窗口运行，不像浏览器标签页。
+- **release 签名**：流水线支持用 GitHub Secrets 里的 keystore 签正式包；没配就只出
+  debug 包。见 `docs/ANDROID.md`。
+- APK 只打 `arm64-v8a`，安装包从 69MB 降到 31MB。
+
+### 修复
+
+- **APK 里服务起不来的根因**：nodejs-mobile 的 Node 18 没编 ICU，
+  `path-to-regexp@8` 里的 `\p{ID_Start}` 会在解析阶段抛 SyntaxError，
+  express 5 整个加载失败。打包时把这些正则替换成 ASCII 等价写法。
+- APK 启动失败时，把 `boot.log` 直接渲染成页面显示，不用抓 logcat。
+
+
+### 新增
+
 - 数据库驱动兼容层：没有 `node:sqlite` 的 Node（18～22、APK 里的 Node 18）自动改用 `sql.js`
   （WASM 版 SQLite），接口与 `node:sqlite` 一致，`ROLEPHONE_SQLITE` 可强制指定
 - 实验性 APK 工程（`android/`）：WebView 壳 + nodejs-mobile(libnode 18)，

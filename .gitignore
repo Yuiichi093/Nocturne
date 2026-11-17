@@ -34,3 +34,7 @@ android/app/src/main/assets/nodejs-project/
 android/app/src/main/assets/*.zip
 *.iml
 android/.staging/
+android/app/release.keystore
+*.keystore
+*.jks
+*.p12

@@ -132,9 +132,12 @@ git pull && npm install && node server.js
 
 ## 关于 APK
 
-已经有一个实验分支：WebView 壳 + 内置 Node 18（nodejs-mobile），数据层在缺少
+独立的 Android 应用：WebView 壳 + 内置 Node 18（nodejs-mobile），数据层在缺少
 `node:sqlite` 时自动退到 WASM 版 SQLite。构建走 GitHub Actions 的 Android workflow，
+产物在 [Releases](https://github.com/Yuiichi093/Nocturne/releases) 里，只包含 `arm64-v8a`。
 详见 [docs/ANDROID.md](docs/ANDROID.md)。
+
+也可以在手机浏览器里打开服务后「添加到主屏幕」，当作 PWA 用，不必装 APK。
 
 ## 开发
 
@@ -144,6 +147,14 @@ npm run check         # 语法检查（node --check）
 ```
 
 贡献前请读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 谁做的
+
+**花雪一** —— 想法、界面、需求，以及每一次真机上的安装与反馈。这个项目里
+长什么样、该有什么，基本都是她定的。
+
+**阿灯** —— AI 结对编程。代码、文档、打包脚本、CI，以及一路踩出来的那些坑
+（比如 Node 18 没编 ICU 这种）。写的时候一直在她的手机和她的耐心上做实验。
 
 ## 许可
 

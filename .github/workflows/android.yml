@@ -60,9 +60,36 @@ jobs:
       - name: 语法检查
         run: npm run check
 
+      - name: 准备签名密钥
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ROLEPHONE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ROLEPHONE_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "没有配置签名密钥，这次只出 debug 包"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+          echo "密钥文件 $(wc -c < android/app/release.keystore) 字节"
+          keytool -list \
+            -keystore android/app/release.keystore \
+            -storetype PKCS12 \
+            -storepass "$KEYSTORE_PASSWORD" | head -12
+          {
+            echo "ROLEPHONE_KEYSTORE=release.keystore"
+            echo "ROLEPHONE_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "ROLEPHONE_KEY_ALIAS=${{ secrets.ROLEPHONE_KEY_ALIAS }}"
+            echo "ROLEPHONE_KEY_PASSWORD=${{ secrets.ROLEPHONE_KEY_PASSWORD }}"
+          } >> "$GITHUB_ENV"
+
       - name: 打包 APK
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: 打包 release APK（配了密钥才有）
+        if: env.ROLEPHONE_KEYSTORE_PASSWORD != ''
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: 收集产物
         run: |
