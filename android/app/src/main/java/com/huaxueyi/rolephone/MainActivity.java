@@ -4,12 +4,14 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.ClipData;
+import android.content.Context;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -32,7 +34,10 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -72,9 +77,23 @@ public class MainActivity extends Activity {
     private static final int PHOTO_PERMISSION_REQUEST = 1002;
     private static final String PREFS = "rolephone";
 
-    static {
-        System.loadLibrary("native-lib");
-        System.loadLibrary("node");
+    private static boolean nativeLoaded = false;
+    private static String nativeError = "";
+
+    /** 原生库加载失败的话进程会当场没了，所以接住并记下来，下次启动能看见 */
+    private static synchronized void loadNative(Context context) {
+        if (nativeLoaded || !nativeError.isEmpty()) {
+            return;
+        }
+        try {
+            System.loadLibrary("native-lib");
+            System.loadLibrary("node");
+            nativeLoaded = true;
+            BootLog.append(context, "[shell] 原生库加载成功");
+        } catch (Throwable t) {
+            nativeError = Log.getStackTraceString(t);
+            BootLog.append(context, "[shell] 原生库加载失败");
+        }
     }
 
     private static boolean nodeStarted = false;
@@ -97,6 +116,18 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        loadNative(this);
+        if (!nativeError.isEmpty()) {
+            showStartupReport("原生库没加载上，App 起不来。");
+            return;
+        }
+        if (NocturneApp.startedAfterCrash) {
+            // 上次没走到页面就退出了，先别急着再崩一次，把记录摆出来让人截图
+            NocturneApp.startedAfterCrash = false;
+            showStartupReport("上次打开没走到页面就退出了。");
+            return;
+        }
+
         // 先把占位画面摆上：解包 + 起 node 以前都在 UI 线程、setContentView 之前做，
         // 升级后第一次打开会有好几秒的空窗口，看着就是白屏。
         rootLayout = new FrameLayout(this);
@@ -118,13 +149,17 @@ public class MainActivity extends Activity {
             return;
         }
         nodeStarted = true;
+        BootLog.markPending(this);
 
         new Thread(() -> {
+            BootLog.append(this, "[shell] 开始解包");
             try {
                 prepareProject(projectDir);
+                BootLog.append(this, "[shell] 解包完成");
             } catch (IOException e) {
                 Log.e(TAG, "解包失败", e);
                 appendLog("[shell] 解包失败: " + e);
+                BootLog.append(this, "[shell] 解包失败: " + e);
             }
             final String mainJs = new File(projectDir, "main.js").getAbsolutePath();
             // 先把 WebView 挂上（它自己有重试），再去起 node。
@@ -134,6 +169,7 @@ public class MainActivity extends Activity {
                     installWebView();
                 }
             });
+            BootLog.append(this, "[shell] 去起 node 了");
             startNode(mainJs);
         }, "prepare-project").start();
     }
@@ -203,6 +239,7 @@ public class MainActivity extends Activity {
                                 blankReloaded = false;
                                 logShown = false;
                                 hideSplash();
+                                BootLog.ready(this);
                                 return;
                             }
                             if (!blankReloaded) {
@@ -699,6 +736,7 @@ public class MainActivity extends Activity {
     private void startNode(final String mainJs) {
         new Thread(() -> {
             final long startedAt = System.currentTimeMillis();
+            BootLog.append(this, "[shell] 进 startNode");
             int code;
             try {
                 code = startNodeWithArguments(new String[]{"node", mainJs});
@@ -706,6 +744,7 @@ public class MainActivity extends Activity {
                 appendLog("node 启动就崩了: " + Log.getStackTraceString(t));
                 code = -1;
             }
+            BootLog.append(this, "[shell] node 退出，code=" + code);
             appendLog("node 退出，code=" + code + "，跑了 " + (System.currentTimeMillis() - startedAt) + " 毫秒");
             Log.i(TAG, "node 退出，code=" + code);
             if (!pageReady && nodeRetries < 1) {
@@ -738,6 +777,52 @@ public class MainActivity extends Activity {
         } catch (IOException e) {
             Log.e(TAG, "写日志失败", e);
         }
+    }
+
+    /** 上次没走完或者原生库没加载上：把记录摊在屏幕上，方便截图发出来 */
+    private void showStartupReport(String reason) {
+        StringBuilder text = new StringBuilder();
+        if (!nativeError.isEmpty()) {
+            text.append("原生库加载失败：\n").append(nativeError).append("\n\n");
+        }
+        if (reason != null && !reason.isEmpty()) {
+            text.append(reason).append("\n\n");
+        }
+        text.append("—— 壳的启动记录 ——\n").append(BootLog.read(this)).append("\n");
+        String crash = BootLog.readCrash(this);
+        if (!crash.isEmpty()) {
+            text.append("—— 上次崩溃 ——\n").append(crash).append("\n");
+        }
+        BootLog.append(this, "[shell] 显示了启动记录");
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackgroundColor(Color.parseColor("#F7F7F7"));
+        box.setPadding(40, 80, 40, 80);
+
+        TextView view = new TextView(this);
+        view.setText(text.toString());
+        view.setTextSize(12);
+        view.setTextColor(Color.parseColor("#1C1C1E"));
+        view.setTypeface(Typeface.MONOSPACE);
+        view.setTextIsSelectable(true);
+        box.addView(view, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        Button again = new Button(this);
+        again.setText("清掉记录，重新启动");
+        again.setOnClickListener(v -> {
+            BootLog.clear(this);
+            recreate();
+        });
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = 40;
+        box.addView(again, params);
+
+        scroll.addView(box);
+        setContentView(scroll);
     }
 
     /** 服务没起来：把 boot.log 摊给用户看，好把错误发出去 */
