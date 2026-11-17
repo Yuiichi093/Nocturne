@@ -73,6 +73,40 @@ function patchNoIcu(modulesDir) {
   }
 }
 
+/** sql.js 只留运行时要的两个文件 */
+function pruneSqljs(pkgDir) {
+  if (!fs.existsSync(pkgDir)) {
+    return;
+  }
+  const keep = new Set([
+    'package.json',
+    path.join('dist', 'sql-wasm.js'),
+    path.join('dist', 'sql-wasm.wasm'),
+  ]);
+  let removed = 0;
+  for (const entry of fs.readdirSync(pkgDir, { withFileTypes: true })) {
+    if (entry.isFile()) {
+      if (!keep.has(entry.name)) {
+        fs.rmSync(path.join(pkgDir, entry.name));
+        removed++;
+      }
+      continue;
+    }
+    if (entry.name !== 'dist') {
+      fs.rmSync(path.join(pkgDir, entry.name), { recursive: true, force: true });
+      removed++;
+      continue;
+    }
+    for (const f of fs.readdirSync(path.join(pkgDir, 'dist'))) {
+      if (!keep.has(path.join('dist', f))) {
+        fs.rmSync(path.join(pkgDir, 'dist', f));
+        removed++;
+      }
+    }
+  }
+  console.log(`  sql.js 精简：删掉 ${removed} 个用不到的文件`);
+}
+
 function main() {
   if (!fs.existsSync(path.join(ROOT, 'node_modules'))) {
     console.error('没找到 node_modules，先在仓库根目录 npm install');
@@ -96,6 +130,11 @@ function main() {
 
   // 2. 依赖（跳过测试/文档这类运行时用不上的东西）
   copyDir(path.join(ROOT, 'node_modules'), path.join(STAGE, 'node_modules'));
+
+  // 2.1 sql.js 的 dist 里全是 debug/inline/asm 各种变体，加起来 30 MB，
+  //     真正要用的只有 sql-wasm.js + sql-wasm.wasm。APK 里少 29 MB，
+  //     首次解包的等待也短很多。
+  pruneSqljs(path.join(STAGE, 'node_modules', 'sql.js'));
 
   // 2.5 nodejs-mobile 自带的 Node 18 是没编 ICU 的，\p{ID_Start} 这种 Unicode
   //     属性正则会在解析阶段直接抛 SyntaxError（express 5 依赖 path-to-regexp 就中招）。

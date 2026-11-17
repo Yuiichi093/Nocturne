@@ -248,7 +248,8 @@ module.exports = function (app, db) {
 
         // 库文件正被连接占着，只能先全部关掉再换文件（其它账号下次访问会自动重开，
         // 它们的库文件一个字节都不动），换完立刻重开当前账号的库
-        db.closeAll();
+        // 只关当前账号的连接：closeAll() 会连累别的账号在途请求（database is closed）
+        db.closeUser(userId);
 
         const targetDb = db.userDbPath(userId);
 

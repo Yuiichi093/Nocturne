@@ -245,6 +245,29 @@ const helpers = {
     return done.length;
   },
 
+  /** 只关掉一个账号的连接（备份恢复换库文件时用，别连累别的账号在途请求） */
+  closeUser(userId) {
+    const id = Number(userId);
+    const conn = connections.get(id);
+    if (!conn) {
+      return false;
+    }
+    connections.delete(id);
+    if (typeof conn.flush === 'function') {
+      try {
+        conn.flush();
+      } catch (error) {
+        // 刷不下去也要能关
+      }
+    }
+    try {
+      conn.close();
+    } catch (error) {
+      // 关不掉就算了，反正要换文件
+    }
+    return true;
+  },
+
   closeAll() {
     helpers.flushAll();
     for (const conn of connections.values()) {

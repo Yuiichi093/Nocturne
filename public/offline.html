@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nocturne · 没有连上</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #f7f7f7;
+      color: #111;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", sans-serif;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+    }
+    h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+    p { font-size: 14px; color: #777; line-height: 1.6; margin: 0 0 18px; }
+    button {
+      font: inherit;
+      font-size: 15px;
+      padding: 10px 22px;
+      border: 0;
+      border-radius: 999px;
+      background: #111;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <h1>服务没连上</h1>
+    <p>应用里的本地服务还没起来，或者刚刚被系统回收了。<br>等几秒再点一次。</p>
+    <button type="button" onclick="location.reload()">重新加载</button>
+  </div>
+</body>
+</html>

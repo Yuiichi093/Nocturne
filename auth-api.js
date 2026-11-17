@@ -8,7 +8,8 @@ const authDb = require('./auth-db');
 const db = require('./db');
 
 const COOKIE = 'nocturne_session';
-const PUBLIC_PATHS = ['/login.html', '/auth-guard.js', '/manifest.json', '/sw.js'];
+// /login 和 /login.html/ 也要放行，否则登录后访问 /login 会落 404
+const PUBLIC_PATHS = ['/login', '/login.html', '/login.html/', '/auth-guard.js', '/manifest.json', '/sw.js', '/offline.html'];
 const PUBLIC_PREFIX = ['/icons/', '/api/auth/', '/api/health'];
 const STATIC_EXT = new Set([
   '.css', '.js', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf',
@@ -116,6 +117,9 @@ function gate(req, res, next) {
 }
 
 module.exports = function registerAuth(app) {
+  // 顺手把 /login 指到登录页，免得输一半地址落 404
+  app.get('/login', (req, res) => res.redirect('/login.html'));
+
   app.post('/api/auth/register', (req, res) => {
     const body = req.body || {};
     try {

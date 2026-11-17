@@ -260,6 +260,7 @@ createTable(`
 addColumnIfMissing('messages', 'sticker_id', 'INTEGER');
 addColumnIfMissing('messages', 'narration', "TEXT NOT NULL DEFAULT ''");
 addColumnIfMissing('messages', 'image_url', "TEXT NOT NULL DEFAULT ''");
+addColumnIfMissing('messages', 'image_desc', "TEXT NOT NULL DEFAULT ''");
 addColumnIfMissing('model_profiles', 'is_vision', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('model_profiles', 'is_image', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('characters', 'ref_image', "TEXT NOT NULL DEFAULT ''");

@@ -1,32 +1,8 @@
 module.exports = function (app, db) {
-  function addColumnIfMissing(table, column, definition) {
-    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-    if (!cols.some((item) => item.name === column)) {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-    }
-  }
+  // messages 的补列（narration / image_url / image_desc / sticker_id）和
+  // message_variants 表统一在 schema.js + migrate.js 里建。以前写在这里，
+  // 模块加载时还没有账号上下文，ALTER 全落到 system.db 上，新账号反而缺列。
 
-  addColumnIfMissing('messages', 'narration', "TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('messages', 'image_url', "TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('messages', 'image_desc', "TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('message_variants', 'narration', "TEXT NOT NULL DEFAULT ''");
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS message_variants (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      message_id INTEGER NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      meta_json TEXT NOT NULL DEFAULT '',
-      sticker_id INTEGER,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  const messageColumns = db.prepare('PRAGMA table_info(messages)').all();
-
-  if (!messageColumns.some((item) => item.name === 'sticker_id')) {
-    db.exec('ALTER TABLE messages ADD COLUMN sticker_id INTEGER');
-  }
 
   const { getActiveWorldId } = require('./worlds');
 const { getWorldbookContext, getWorldbookContextByNames } = require('./worldbook');

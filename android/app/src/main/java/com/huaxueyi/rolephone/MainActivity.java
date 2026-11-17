@@ -67,21 +67,9 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        File projectDir = new File(getFilesDir(), "nodejs-project");
-        try {
-            prepareProject(projectDir);
-        } catch (IOException e) {
-            Log.e(TAG, "解包失败", e);
-        }
-
-        if (!nodeStarted) {
-            nodeStarted = true;
-            final String mainJs = new File(projectDir, "main.js").getAbsolutePath();
-            startNode(mainJs);
-        }
-
+        // 先把占位画面摆上：解包 + 起 node 以前都在 UI 线程、setContentView 之前做，
+        // 升级后第一次打开会有好几秒的空窗口，看着就是白屏。
         rootLayout = new FrameLayout(this);
-
         splashView = new TextView(this);
         splashView.setText("Nocturne 正在启动…");
         splashView.setGravity(Gravity.CENTER);
@@ -90,14 +78,39 @@ public class MainActivity extends Activity {
         splashView.setBackgroundColor(Color.parseColor("#F7F7F7"));
         rootLayout.addView(splashView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
         setContentView(rootLayout);
 
-        installWebView();
+        final File projectDir = new File(getFilesDir(), "nodejs-project");
+
+        if (nodeStarted) {
+            // 同一个进程里 Activity 重建：node 还在跑，直接把 WebView 挂回来
+            installWebView();
+            return;
+        }
+        nodeStarted = true;
+
+        new Thread(() -> {
+            try {
+                prepareProject(projectDir);
+            } catch (IOException e) {
+                Log.e(TAG, "解包失败", e);
+                appendLog("[shell] 解包失败: " + e);
+            }
+            final String mainJs = new File(projectDir, "main.js").getAbsolutePath();
+            startNode(mainJs);
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed()) {
+                    installWebView();
+                }
+            });
+        }, "prepare-project").start();
     }
 
     /** 建一个 WebView 并加载首页；渲染进程挂掉后也用它重建 */
     private void installWebView() {
+        if (webView != null) {
+            return; // 已经有了（onCreate 与解包线程可能都想装一次），别叠两个
+        }
         webView = new WebView(this);
 
         WebSettings settings = webView.getSettings();
@@ -117,6 +130,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (retryCount < 120) {
+                    showSplash();
                     view.postDelayed(() -> loadHome(), 500);
                     retryCount++;
                 } else if (!logShown) {
@@ -144,6 +158,8 @@ public class MainActivity extends Activity {
                             if (length > 0) {
                                 pageReady = true;
                                 retryCount = 0;
+                                blankReloaded = false;
+                                logShown = false;
                                 hideSplash();
                                 return;
                             }
@@ -165,8 +181,12 @@ public class MainActivity extends Activity {
                 appendLog("[shell] WebView 渲染进程被回收，重建");
                 rootLayout.removeView(view);
                 view.destroy();
+                webView = null; // 置空，installWebView 才会真的重建一个
                 pageReady = false;
                 blankReloaded = false;
+                logShown = false;
+                retryCount = 0;
+                showSplash();
                 installWebView();
                 return true;
             }
@@ -207,6 +227,12 @@ public class MainActivity extends Activity {
         webView.loadUrl(HOME_URL);
     }
 
+    private void showSplash() {
+        if (splashView != null) {
+            splashView.setVisibility(TextView.VISIBLE);
+        }
+    }
+
     private void hideSplash() {
         if (splashView != null && splashView.getVisibility() == TextView.VISIBLE) {
             splashView.setVisibility(TextView.GONE);
@@ -218,16 +244,13 @@ public class MainActivity extends Activity {
         super.onResume();
         // 从后台回来还是白的（进程被系统杀过、渲染进程没了）：重新加载一次
         if (webView == null) {
-            if (rootLayout != null) {
-                installWebView();
-            }
+            // 解包线程还没装好 WebView，让它自己装，别在这儿抢
             return;
         }
         if (!pageReady) {
-            String current = webView.getUrl();
-            if (current == null || current.startsWith("about:") || current.isEmpty()) {
-                loadHome();
-            }
+            blankReloaded = false;
+            showSplash();
+            loadHome();
         }
     }
 
@@ -241,6 +264,7 @@ public class MainActivity extends Activity {
                 code = -1;
             }
             appendLog("node 退出，code=" + code);
+            nodeStarted = false;
             Log.i(TAG, "node 退出，code=" + code);
             runOnUiThread(() -> {
                 if (!pageReady && !logShown) {
@@ -287,6 +311,19 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        fileCallback = null;
+        if (webView != null) {
+            if (rootLayout != null) {
+                rootLayout.removeView(webView);
+            }
+            webView.destroy();
+            webView = null;
+        }
+        super.onDestroy();
     }
 
     @Override

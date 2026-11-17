@@ -1,6 +1,6 @@
 {
   "name": "nocturne",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "跑在自己手机上的 AI 角色聊天应用：角色聊天 / 小剧场 / 朋友圈 / 世界书 / 生图，完全本地运行。",
   "main": "server.js",
   "scripts": {
@@ -27,7 +27,7 @@
     "sql.js": "^1.16.0"
   },
   "license": "MIT",
-  "author": "Yuiichi <Yuiichi093@users.noreply.github.com>（想法与设计）· 阿灯 / Aiden（结对编程）",
+  "author": "Yuiichi <Yuiichi093@users.noreply.github.com> · Aiden",
   "engines": {
     "node": ">=18.0.0"
   },

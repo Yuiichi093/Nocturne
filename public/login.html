@@ -300,14 +300,23 @@
     }
 
     // 只接受站内相对地址，避免 ?next= 把人带到别的站点
+    // （/%5Cevil.com 这类反斜杠变体会被浏览器当成协议相对地址，得单独挡）
     function redirectTarget() {
       let raw = '';
       try {
         raw = new URLSearchParams(location.search).get('next') || '';
       } catch (e) {}
 
-      if (raw && raw.charAt(0) === '/' && raw.charAt(1) !== '/') return raw;
-      return '/';
+      if (!raw || raw.charAt(0) !== '/') return '/';
+      if (raw.charAt(1) === '/') return '/';
+      if (/[\\\u0000-\u001f]/.test(raw)) return '/';
+      try {
+        const resolved = new URL(raw, location.origin);
+        if (resolved.origin !== location.origin) return '/';
+        return resolved.pathname + resolved.search + resolved.hash;
+      } catch (e) {
+        return '/';
+      }
     }
 
     async function submit() {
@@ -340,6 +349,9 @@
         if (nickname) body.nickname = nickname;
       }
 
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+
       try {
         const res = await fetch(
           mode === 'register' ? '/api/auth/register' : '/api/auth/login',
@@ -347,7 +359,8 @@
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal: controller.signal
           }
         );
 
@@ -373,8 +386,9 @@
         }
         showError(message);
       } catch (e) {
-        showError('连不上服务，请检查网络后再试');
+        showError(e && e.name === 'AbortError' ? '服务没有响应，稍后再试一下' : '连不上服务，请检查网络后再试');
       } finally {
+        clearTimeout(timer);
         busy = false;
         submitBtn.disabled = false;
         submitBtn.textContent = originalLabel;
