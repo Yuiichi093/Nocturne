@@ -94,7 +94,13 @@ jobs:
       - name: 收集产物
         run: |
           mkdir -p out
-          find android/app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          # 有 release 包就只放 release（正式密钥签名，能覆盖安装）
+          # debug 包签名不同，装到旧版本上会「应用未安装」，别混进去
+          if [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk out/app-release.apk
+          else
+            find android/app/build/outputs/apk/debug -name '*.apk' -exec cp {} out/app-debug.apk \;
+          fi
           ls -la out/
 
       - uses: actions/upload-artifact@v4
@@ -111,5 +117,5 @@ jobs:
           gh release create "$TAG" out/*.apk \
             --repo "$GITHUB_REPOSITORY" \
             --title "APK $TAG" \
-            --notes "GitHub Actions 自动构建的调试版安装包（debug 签名，可直接安装）。" \
+            --notes "GitHub Actions 自动构建的安装包，覆盖安装即可，数据不会丢。" \
             --latest
