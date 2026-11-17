@@ -70,6 +70,7 @@ require('./identity-options-api')(app, db);
 require('./profile-api')(app, db);
 require('./sticker-api')(app, db);
 require('./image-api')(app, db);
+require('./update-api')(app);
 // 上传的图片文件名带时间戳和随机串，内容永不会变，可以放心长期缓存。
 // 必须挂在 no-store 中间件之前，否则会被一并禁止缓存，
 // 结果就是每翻一页、每开一次首页，所有头像和背景图都要重新下载。

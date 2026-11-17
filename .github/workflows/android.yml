@@ -128,8 +128,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="apk-$(date +%Y%m%d-%H%M)"
+          # 版本号和更新公告都从 package.json / CHANGELOG 取，App 里的「检查更新」直接读这份正文
+          VER=$(node -p "require('./package.json').version")
+          node -e "
+            const fs = require('fs');
+            const ver = process.argv[1];
+            const text = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const start = text.indexOf('## [' + ver + ']');
+            let body = '有新版本可以更新。';
+            if (start >= 0) {
+              const rest = text.slice(start);
+              const end = rest.indexOf('\n## [', 5);
+              body = (end > 0 ? rest.slice(0, end) : rest).trim();
+            }
+            fs.writeFileSync('notes.md', '版本 ' + ver + '\n\n' + body + '\n');
+          " "$VER"
           gh release create "$TAG" out/*.apk \
             --repo "$GITHUB_REPOSITORY" \
-            --title "APK $TAG" \
-            --notes "GitHub Actions 自动构建的安装包，覆盖安装即可，数据不会丢。" \
+            --title "Nocturne $VER" \
+            --notes-file notes.md \
             --latest

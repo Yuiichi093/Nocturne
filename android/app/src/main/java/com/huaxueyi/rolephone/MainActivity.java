@@ -633,6 +633,19 @@ public class MainActivity extends Activity {
             saveImageToAlbumAsync(src, null, null);
         }
 
+        /** 下载新版本安装包：交给系统下载器，下完点通知安装 */
+        @JavascriptInterface
+        public void downloadApk(String url) {
+            if (url == null || url.isEmpty()) {
+                toast("下载地址是空的");
+                return;
+            }
+            runOnUiThread(() -> {
+                toast("开始下载安装包…");
+                downloadWithSystem(url, null, null, "application/vnd.android.package-archive");
+            });
+        }
+
         @JavascriptInterface
         public void saveImageAs(String src, String name) {
             saveImageToAlbumAsync(src, null, name);

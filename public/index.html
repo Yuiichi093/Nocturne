@@ -471,6 +471,25 @@
       backdrop-filter: none;
       -webkit-backdrop-filter: none;
     }
+
+    .update-status {
+      margin: 8px 0 0;
+      min-height: 18px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .update-note-box {
+      margin-top: 12px;
+    }
+
+    .update-note {
+      margin: 0 0 12px;
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
   </style>
   <link rel="stylesheet" href="/home-layout.css">
   <link rel="stylesheet" href="/vendor/cropper.min.css">
@@ -604,6 +623,20 @@
           <button class="ghost-btn" onclick="location.href='/worldbook.html'" type="button">世界书</button>
           <button class="ghost-btn" onclick="location.href='/calendar.html'" type="button">生日与节日</button>
           <button class="ghost-btn" onclick="location.href='/backup.html'" type="button">备份与恢复</button>
+        </div>
+
+        <div class="settings-card">
+          <h2>更新</h2>
+          <div class="account-row">
+            <span>当前版本</span>
+            <strong id="currentVersion">读取中…</strong>
+          </div>
+          <p class="update-status" id="updateStatus"></p>
+          <button class="ghost-btn" id="checkUpdateBtn" type="button">检查更新</button>
+          <div class="update-note-box" id="updateNoteBox" hidden>
+            <p class="update-note" id="updateNoteText"></p>
+            <button class="primary-btn" id="downloadUpdateBtn" type="button">下载新版本</button>
+          </div>
         </div>
 
         <div class="settings-card">
@@ -857,5 +890,6 @@
     })();
   </script>
   <script src="/save-image.js"></script>
+  <script src="/update-check.js"></script>
 </body>
 </html>
