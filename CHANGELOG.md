@@ -3,10 +3,17 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号按 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [1.2.0] - 2026-11-18
 
 ### 新增
 
+- **账号系统（单机多账号）**：一台设备上可以有多个账号，各自的数据互不可见。
+  做法是「一个账号一个数据库文件」（`data/users/<id>/saudade.db`），
+  上层查询语句一行不用改，靠 `AsyncLocalStorage` 把请求路由到对应账号的库。
+  第一个注册的账号自动继承升级前的数据。见 [docs/ACCOUNTS.md](docs/ACCOUNTS.md)。
+- 登录页 `/login.html`、全局登录守卫 `public/auth-guard.js`、首页「账号」卡片
+  （改密码 / 退出登录）。
+- 登录失败限速：同一来源连错 5 次歇 3 秒。
 - **PWA**：`public/manifest.json` + service worker + 三套图标。手机浏览器打开服务后
   可以「添加到主屏幕」，独立窗口运行，不像浏览器标签页。
 - **release 签名**：流水线支持用 GitHub Secrets 里的 keystore 签正式包；没配就只出
@@ -19,6 +26,11 @@
   `path-to-regexp@8` 里的 `\p{ID_Start}` 会在解析阶段抛 SyntaxError，
   express 5 整个加载失败。打包时把这些正则替换成 ASCII 等价写法。
 - APK 启动失败时，把 `boot.log` 直接渲染成页面显示，不用抓 logcat。
+
+### 变更
+
+- 图片目录、备份目录、自动备份、图片清理工具全部按账号隔离：
+  账号 A 的备份不会包含账号 B 的内容，`/uploads/xxx.jpg` 也只能在自己的账号里取到。
 
 
 ### 新增

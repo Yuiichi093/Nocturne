@@ -15,7 +15,9 @@
  * 都会先把结构准备好。所有语句都是 IF NOT EXISTS / 存在性检查，可反复执行。
  */
 
-const db = require('./db');
+// 现在不再是「require 即执行」，而是被 userdata.js 对每个账号的库调用一次。
+// 参数 db 就是那个账号的数据库连接。
+module.exports = function migrate(db) {
 
 function createTable(sql) {
   db.exec(sql);
@@ -393,4 +395,5 @@ if (Number(holidayCount) === 0) {
 // 评论可能是用户写的（character_id 为空），也可能是角色写的（存角色 id）。
 addColumnIfMissing('moment_comments', 'character_id', 'INTEGER');
 
-module.exports = { run: () => true, defaultWorldId };
+  return { defaultWorldId };
+};

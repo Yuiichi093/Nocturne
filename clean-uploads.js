@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// 清理 data/uploads 里没有任何数据库记录引用的图片（换头像/换背景/删角色后留下的）。
+// 清理账号 uploads 里没有任何数据库记录引用的图片（换头像/换背景/删角色后留下的）。
 //
 //   node clean-uploads.js            只看清单，不删任何东西
-//   node clean-uploads.js --delete   真删（会先把整个 uploads 打包备份到 backups/）
+//   node clean-uploads.js --delete   真删（会先把该账号的 uploads 打包备份到它自己的 backups/）
 //
 // 判断依据：扫描数据库所有表的全部文本字段，凡是出现过 /uploads/xxx 的都算被引用。
 'use strict';
@@ -11,10 +11,9 @@ const fs = require('fs');
 const path = require('path');
 const db = require('./db');
 
-const UPLOAD_DIR = path.join(__dirname, 'data', 'uploads');
-const BACKUP_DIR = path.join(__dirname, 'backups');
 const DO_DELETE = process.argv.includes('--delete');
 
+// 在 db.runWithUser(id, ...) 里调用，db.prepare 才会落到这个账号的库上
 function collectReferencedPaths() {
   const tables = db.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -57,15 +56,20 @@ function formatSize(bytes) {
   return (bytes / 1048576).toFixed(1) + ' MB';
 }
 
-function main() {
-  if (!fs.existsSync(UPLOAD_DIR)) {
-    console.log('没有 data/uploads 目录，无需清理。');
+function cleanUser(id) {
+  const uploadDir = db.uploadsDir(id);
+
+  console.log('');
+  console.log('===== 账号 ' + id + ' =====');
+
+  if (!fs.existsSync(uploadDir)) {
+    console.log('没有 uploads 目录，无需清理。');
     return;
   }
 
   const referenced = collectReferencedPaths();
-  const files = fs.readdirSync(UPLOAD_DIR).filter((name) => {
-    return fs.statSync(path.join(UPLOAD_DIR, name)).isFile();
+  const files = fs.readdirSync(uploadDir).filter((name) => {
+    return fs.statSync(path.join(uploadDir, name)).isFile();
   });
 
   const orphans = [];
@@ -73,7 +77,7 @@ function main() {
 
   for (const name of files) {
     if (referenced.has('/uploads/' + name)) continue;
-    const size = fs.statSync(path.join(UPLOAD_DIR, name)).size;
+    const size = fs.statSync(path.join(uploadDir, name)).size;
     orphans.push({ name, size });
     orphanBytes += size;
   }
@@ -95,32 +99,32 @@ function main() {
   console.log('');
 
   if (!DO_DELETE) {
-    console.log('以上只是预览，没有删除任何文件。');
-    console.log('确认无误后执行：node clean-uploads.js --delete');
     return;
   }
 
   // 删除前先把整个 uploads 打包备份，反悔了还能找回来
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const backupDir = db.backupsDir(id);
+  fs.mkdirSync(backupDir, { recursive: true });
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) +
     '_' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
-  const backupPath = path.join(BACKUP_DIR, 'uploads-' + stamp + '.tar.gz');
+  const backupPath = path.join(backupDir, 'uploads-' + stamp + '.tar.gz');
 
   try {
     const { execFileSync } = require('child_process');
-    execFileSync('tar', ['-czf', backupPath, '-C', path.join(__dirname, 'data'), 'uploads']);
+    execFileSync('tar', ['-czf', backupPath, '-C', path.dirname(uploadDir), 'uploads']);
     console.log('已备份到：' + backupPath);
   } catch (e) {
     console.error('备份失败，为安全起见已中止删除：' + e.message);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   let removed = 0;
   for (const item of orphans) {
     try {
-      fs.unlinkSync(path.join(UPLOAD_DIR, item.name));
+      fs.unlinkSync(path.join(uploadDir, item.name));
       removed += 1;
     } catch (e) {
       console.error('删除失败 ' + item.name + '：' + e.message);
@@ -129,6 +133,31 @@ function main() {
 
   console.log('');
   console.log('已删除 ' + removed + ' 个文件，释放 ' + formatSize(orphanBytes));
+}
+
+function main() {
+  const ids = db.listUserIds();
+
+  if (!ids.length) {
+    console.log('还没有账号（data/users 下没有库），无需清理。');
+    return;
+  }
+
+  for (const id of ids) {
+    try {
+      db.runWithUser(id, () => cleanUser(id));
+    } catch (e) {
+      // 一个账号出错不影响继续看下一个
+      console.error('账号 ' + id + ' 清理失败：' + e.message);
+      process.exitCode = 1;
+    }
+  }
+
+  if (!DO_DELETE) {
+    console.log('');
+    console.log('以上只是预览，没有删除任何文件。');
+    console.log('确认无误后执行：node clean-uploads.js --delete');
+  }
 }
 
 main();

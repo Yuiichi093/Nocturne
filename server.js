@@ -9,11 +9,24 @@ const { getActiveWorldId } = require('./worlds');
 const app = express();
 const PORT = process.env.PORT || 8787;
 
-const uploadDir = path.join(__dirname, 'data', 'uploads');
-fs.mkdirSync(uploadDir, { recursive: true });
+// 多账号后每个账号有自己的图片目录：data/users/<id>/uploads
+function uploadsDirFor(req) {
+  if (!req.user) {
+    throw new Error('未登录，不知道该把图片存给谁');
+  }
+  const dir = path.join(db.userDir(req.user.id), 'uploads');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
+  destination: (req, file, cb) => {
+    try {
+      cb(null, uploadsDirFor(req));
+    } catch (error) {
+      cb(error);
+    }
+  },
   filename: (req, file, cb) => {
     // 扩展名不能听客户端的，否则传个 x.html 也能被当网页执行
     const rawExt = path.extname(file.originalname).toLowerCase();
@@ -36,6 +49,13 @@ const upload = multer({
 });
 
 app.use(express.json({ limit: '10mb' }));
+
+// 账号系统：先认出 cookie 里的账号（把后续处理包进该账号的数据库上下文），
+// 再把没登录的挡在门外。必须排在所有接口和静态目录之前。
+const auth = require('./auth-api');
+app.use(auth.middleware);
+app.use(auth.gate);
+require('./auth-api')(app);
 require('./chat-api')(app, db);
 require('./theater-api')(app, db);
 require('./theater-play-api')(app, db);
@@ -53,10 +73,14 @@ require('./image-api')(app, db);
 // 上传的图片文件名带时间戳和随机串，内容永不会变，可以放心长期缓存。
 // 必须挂在 no-store 中间件之前，否则会被一并禁止缓存，
 // 结果就是每翻一页、每开一次首页，所有头像和背景图都要重新下载。
-app.use('/uploads', express.static(uploadDir, {
-  maxAge: '365d',
-  immutable: true
-}));
+// 图片按账号隔离：同一个 /uploads/xxx.jpg 只在这个账号登录时能取到
+app.use('/uploads', (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).end();
+  }
+  const dir = path.join(db.userDir(req.user.id), 'uploads');
+  express.static(dir, { maxAge: '365d', immutable: true })(req, res, next);
+});
 
 // 其余接口和前端代码继续保持不缓存：改完代码刷新就能生效，不用手动清缓存。
 app.use((req, res, next) => {

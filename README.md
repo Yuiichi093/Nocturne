@@ -19,7 +19,8 @@
 ## 这是什么
 
 Nocturne 是一个**完全跑在本地**的角色扮演聊天应用：Node.js 起一个本地服务，
-浏览器打开 `127.0.0.1:8787` 使用。没有账号、没有云端、聊天记录和图片都存在你自己手机上的 SQLite 里。
+浏览器打开 `127.0.0.1:8787` 使用。没有云端、没有注册表，聊天记录和图片都存在你自己手机上的 SQLite 里。
+账号也只是本机的一份用户名密码（`data/auth.db`），一台设备可以有多个账号，彼此的数据互不可见。
 
 它最初是为在 Android（Termux）上使用而写的，界面按 iOS 的风格做：分组灰底、白卡片、底部升起的面板。
 
@@ -45,6 +46,11 @@ Nocturne 是一个**完全跑在本地**的角色扮演聊天应用：Node.js �
 - 角色可以评论、点赞，也能自己发动态
 - 同一世界观的角色互相可见
 - 角色能读你发的图片内容
+
+**账号**
+- 单机多账号：一个账号一个数据库文件，互相看不见
+- 登录 / 注册页、改密码、退出；连错 5 次歇 3 秒
+- 升级前的老数据由第一个注册的账号自动继承
 
 **其他**
 - 世界书（关键词检索，连角色名字一起匹配）
@@ -129,13 +135,15 @@ git pull && npm install && node server.js
 ```
 
 数据不会被覆盖：`data/` 是运行期目录，不在版本控制里。
+从没有账号的版本升级上来时，第一次注册会接管原来的 `data/saudade.db` 与图片，
+见 [docs/ACCOUNTS.md](docs/ACCOUNTS.md)。
 
 ## 关于 APK
 
 独立的 Android 应用：WebView 壳 + 内置 Node 18（nodejs-mobile），数据层在缺少
 `node:sqlite` 时自动退到 WASM 版 SQLite。构建走 GitHub Actions 的 Android workflow，
 产物在 [Releases](https://github.com/Yuiichi093/Nocturne/releases) 里，只包含 `arm64-v8a`。
-详见 [docs/ANDROID.md](docs/ANDROID.md)。
+详见 [docs/ANDROID.md](docs/ANDROID.md)；账号与数据隔离见 [docs/ACCOUNTS.md](docs/ACCOUNTS.md)。
 
 也可以在手机浏览器里打开服务后「添加到主屏幕」，当作 PWA 用，不必装 APK。
 

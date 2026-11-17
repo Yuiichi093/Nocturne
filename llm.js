@@ -167,7 +167,17 @@ function imageToDataUrl(imageUrl) {
 
   if (!clean.startsWith('/uploads/')) return '';
 
-  const file = path.join(__dirname, 'data', 'uploads', path.basename(clean));
+  // 图片按账号分开存，data/uploads 里已经没有东西了，得看当前请求是谁在看图
+  let baseDir;
+
+  try {
+    baseDir = db.uploadsDir();
+  } catch (e) {
+    // 取不到目录（不在请求上下文里）就当图片读不出来，让上层走原来的降级
+    return '';
+  }
+
+  const file = path.join(baseDir, path.basename(clean));
 
   try {
     if (!fs.existsSync(file)) return '';

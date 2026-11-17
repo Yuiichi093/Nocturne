@@ -11,6 +11,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>Nocturne</title>
+  <script src="/auth-guard.js"></script>
   <style>
     :root {
       --bg: #f7f7f7;
@@ -274,6 +275,33 @@
       margin: 0 0 14px;
       font-size: 16px;
       font-weight: 600;
+    }
+
+    .account-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+      font-size: 13px;
+    }
+
+    .account-row span:first-child {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .account-row strong {
+      font-weight: 500;
+      text-align: right;
+      word-break: break-all;
+    }
+
+    .account-msg {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.6;
     }
 
     .field {
@@ -577,6 +605,44 @@
           <button class="ghost-btn" onclick="location.href='/calendar.html'" type="button">生日与节日</button>
           <button class="ghost-btn" onclick="location.href='/backup.html'" type="button">备份与恢复</button>
         </div>
+
+        <div class="settings-card">
+          <h2>账号</h2>
+
+          <div class="account-row">
+            <span>当前账号</span>
+            <strong id="accountName">读取中…</strong>
+          </div>
+
+          <div class="field">
+            <label>当前密码</label>
+            <input
+              id="accountOldPassword"
+              type="password"
+              autocomplete="current-password"
+              placeholder="输入当前密码"
+            >
+          </div>
+
+          <div class="field">
+            <label>新密码</label>
+            <input
+              id="accountNewPassword"
+              type="password"
+              autocomplete="new-password"
+              placeholder="输入新密码"
+            >
+          </div>
+
+          <button class="primary-btn" id="accountChangePassword" type="button">
+            修改密码
+          </button>
+          <button class="ghost-btn" id="accountLogout" type="button">
+            退出登录
+          </button>
+
+          <p class="account-msg" id="accountMsg"></p>
+        </div>
       </section>
     </main>
 
@@ -691,6 +757,104 @@
         });
       });
     }
+  </script>
+  <script>
+    // 账号卡片：显示当前账号、改密码、退出
+    (function () {
+      const nameEl = $('accountName');
+      const msgEl = $('accountMsg');
+      const oldPwdEl = $('accountOldPassword');
+      const newPwdEl = $('accountNewPassword');
+      const changeBtn = $('accountChangePassword');
+      const logoutBtn = $('accountLogout');
+
+      function setMsg(text) {
+        msgEl.textContent = text || '';
+      }
+
+      async function loadAccount() {
+        try {
+          const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
+          if (!res.ok) {
+            nameEl.textContent = '未登录';
+            return;
+          }
+
+          const data = await res.json();
+          const user = data && data.user;
+          if (!user) {
+            nameEl.textContent = '未登录';
+            return;
+          }
+
+          if (user.nickname && user.nickname !== user.username) {
+            nameEl.textContent = user.nickname + '（' + user.username + '）';
+          } else {
+            nameEl.textContent = user.nickname || user.username || '未登录';
+          }
+        } catch (e) {
+          nameEl.textContent = '读取失败';
+        }
+      }
+
+      changeBtn.addEventListener('click', async () => {
+        const oldPassword = oldPwdEl.value;
+        const newPassword = newPwdEl.value;
+
+        if (!oldPassword || !newPassword) {
+          setMsg('请把当前密码和新密码都填上');
+          return;
+        }
+
+        changeBtn.disabled = true;
+        setMsg('');
+
+        try {
+          const res = await fetch('/api/auth/password', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              old_password: oldPassword,
+              new_password: newPassword
+            })
+          });
+
+          let data = null;
+          try {
+            data = await res.json();
+          } catch (e) {}
+
+          if (res.ok) {
+            oldPwdEl.value = '';
+            newPwdEl.value = '';
+            setMsg('密码已更新');
+            toast('密码已更新');
+          } else {
+            setMsg((data && data.error) || '改密码失败，请稍后再试');
+          }
+        } catch (e) {
+          setMsg('连不上服务，请稍后再试');
+        } finally {
+          changeBtn.disabled = false;
+        }
+      });
+
+      logoutBtn.addEventListener('click', async () => {
+        logoutBtn.disabled = true;
+        try {
+          await fetch('/api/auth/logout', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+          });
+        } catch (e) {}
+        location.replace('/login.html');
+      });
+
+      loadAccount();
+    })();
   </script>
 </body>
 </html>

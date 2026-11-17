@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f7f7" id="themeColor">
+  <meta name="apple-mobile-web-app-title" content="Nocturne">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Nocturne · 登录</title>
+  <script>
+    // 跟首页共用同一个夜间模式开关
+    try {
+      if (localStorage.getItem('saudade-theme') === 'dark') {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    } catch (e) {}
+  </script>
+  <style>
+    :root {
+      --bg: #f7f7f7;
+      --ink: #111111;
+      --muted: #777777;
+      --card: #ffffff;
+      --line: rgba(0,0,0,.09);
+      --shadow: 0 18px 50px rgba(0,0,0,.10);
+      --danger: #b00020;
+      --safe: env(safe-area-inset-bottom, 0px);
+    }
+
+    html[data-theme="dark"] {
+      --bg: #0a0a0a;
+      --ink: #f4f4f4;
+      --muted: #8b8b8b;
+      --card: #161616;
+      --line: rgba(255,255,255,.12);
+      --shadow: 0 18px 50px rgba(0,0,0,.45);
+      --danger: #ff6b6b;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    body {
+      min-height: 100dvh;
+      padding: 0 18px calc(30px + var(--safe));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    button, input { font: inherit; }
+    button { border: 0; cursor: pointer; }
+
+    .wrap {
+      width: min(100%, 380px);
+      padding: 34px 0 10px;
+    }
+
+    .brand { padding: 0 4px 18px; }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 26px;
+      font-weight: 500;
+      letter-spacing: .03em;
+    }
+
+    .sub {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      padding: 6px;
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: transparent;
+    }
+
+    .tabs button {
+      padding: 11px 8px;
+      border-radius: 15px;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .tabs button.active {
+      background: var(--ink);
+      color: var(--bg);
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .field label {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .field input {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: transparent;
+      color: var(--ink);
+      outline: none;
+    }
+
+    .field input:focus { border-color: var(--ink); }
+
+    .field[hidden] { display: none; }
+
+    .error {
+      margin: 2px 0 10px;
+      color: var(--danger);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .error[hidden] { display: none; }
+
+    .hint {
+      margin: 2px 0 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.7;
+    }
+
+    .hint[hidden] { display: none; }
+
+    .primary-btn {
+      width: 100%;
+      margin-top: 4px;
+      padding: 13px 14px;
+      border: 1px solid var(--ink);
+      border-radius: 16px;
+      background: var(--ink);
+      color: var(--bg);
+    }
+
+    .primary-btn:disabled {
+      opacity: .5;
+      cursor: default;
+    }
+
+    .foot {
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+      text-align: center;
+      letter-spacing: .04em;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="brand">
+      <p class="eyebrow">Nocturne</p>
+      <h1 id="pageHeading">登录</h1>
+      <p class="sub" id="pageSub">输入账号密码，回到你的世界。</p>
+    </div>
+
+    <div class="card">
+      <div class="tabs" role="tablist">
+        <button id="tabLogin" class="active" type="button" role="tab">登录</button>
+        <button id="tabRegister" type="button" role="tab">注册</button>
+      </div>
+
+      <form id="authForm" novalidate>
+        <div class="field">
+          <label for="username">用户名</label>
+          <input
+            id="username"
+            name="username"
+            autocomplete="username"
+            autocapitalize="off"
+            autocorrect="off"
+            maxlength="32"
+            placeholder="用户名"
+          >
+        </div>
+
+        <div class="field">
+          <label for="password">密码</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            maxlength="128"
+            placeholder="密码"
+          >
+        </div>
+
+        <div class="field" id="nicknameField" hidden>
+          <label for="nickname">昵称（可选）</label>
+          <input
+            id="nickname"
+            name="nickname"
+            maxlength="20"
+            placeholder="显示的名字，留空就用用户名"
+          >
+        </div>
+
+        <p class="error" id="authError" role="alert" hidden></p>
+
+        <p class="hint" id="firstUseHint" hidden>
+          第一次使用？这台设备上已有的数据（角色、聊天、图片）会被第一个注册的账号继承。
+        </p>
+
+        <button class="primary-btn" id="submitBtn" type="submit">登录</button>
+      </form>
+    </div>
+
+    <p class="foot">单机多账号 · 数据只存在这台设备上</p>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    const form = $('authForm');
+    const usernameInput = $('username');
+    const passwordInput = $('password');
+    const nicknameInput = $('nickname');
+    const nicknameField = $('nicknameField');
+    const submitBtn = $('submitBtn');
+    const errorEl = $('authError');
+    const hintEl = $('firstUseHint');
+
+    let mode = 'login';
+    let busy = false;
+
+    function showError(message) {
+      errorEl.textContent = message;
+      errorEl.hidden = !message;
+    }
+
+    function setMode(next) {
+      mode = next;
+      const isRegister = next === 'register';
+
+      $('tabLogin').classList.toggle('active', !isRegister);
+      $('tabRegister').classList.toggle('active', isRegister);
+      $('tabLogin').setAttribute('aria-selected', String(!isRegister));
+      $('tabRegister').setAttribute('aria-selected', String(isRegister));
+
+      $('pageHeading').textContent = isRegister ? '注册' : '登录';
+      $('pageSub').textContent = isRegister
+        ? '建一个账号，之后就从这个入口进来。'
+        : '输入账号密码，回到你的世界。';
+
+      nicknameField.hidden = !isRegister;
+      hintEl.hidden = !isRegister;
+      submitBtn.textContent = isRegister ? '注册并登录' : '登录';
+
+      passwordInput.autocomplete = isRegister ? 'new-password' : 'current-password';
+      showError('');
+    }
+
+    // 只接受站内相对地址，避免 ?next= 把人带到别的站点
+    function redirectTarget() {
+      let raw = '';
+      try {
+        raw = new URLSearchParams(location.search).get('next') || '';
+      } catch (e) {}
+
+      if (raw && raw.charAt(0) === '/' && raw.charAt(1) !== '/') return raw;
+      return '/';
+    }
+
+    async function submit() {
+      if (busy) return;
+
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value;
+
+      if (!username) {
+        showError('请填写用户名');
+        usernameInput.focus();
+        return;
+      }
+
+      if (!password) {
+        showError('请填写密码');
+        passwordInput.focus();
+        return;
+      }
+
+      showError('');
+      busy = true;
+      submitBtn.disabled = true;
+      const originalLabel = submitBtn.textContent;
+      submitBtn.textContent = mode === 'register' ? '注册中…' : '登录中…';
+
+      const body = { username, password };
+      if (mode === 'register') {
+        const nickname = nicknameInput.value.trim();
+        if (nickname) body.nickname = nickname;
+      }
+
+      try {
+        const res = await fetch(
+          mode === 'register' ? '/api/auth/register' : '/api/auth/login',
+          {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }
+        );
+
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (e) {}
+
+        if (res.ok) {
+          location.replace(redirectTarget());
+          return;
+        }
+
+        let message = data && data.error;
+        if (!message) {
+          if (res.status === 401) {
+            message = '用户名或密码不对';
+          } else if (res.status === 409) {
+            message = '这个用户名已经被占用了';
+          } else {
+            message = mode === 'register' ? '注册失败，请稍后再试' : '登录失败，请稍后再试';
+          }
+        }
+        showError(message);
+      } catch (e) {
+        showError('连不上服务，请检查网络后再试');
+      } finally {
+        busy = false;
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalLabel;
+      }
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      submit();
+    });
+
+    $('tabLogin').addEventListener('click', () => setMode('login'));
+    $('tabRegister').addEventListener('click', () => setMode('register'));
+
+    // 一个账号都还没有时，直接停在注册页
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.has_users === false) {
+          setMode('register');
+          $('pageSub').textContent = '这台设备上还没有账号，先建一个。';
+        }
+      } catch (e) {}
+    })();
+
+    // 已登录的人打开这个页面时给一句提示，不自动跳走，方便换账号
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const user = data && data.user;
+        if (!user || mode !== 'login') return;
+        const name = user.nickname || user.username || '';
+        $('pageSub').textContent = name
+          ? `当前已登录：${name}。也可以换一个账号登录。`
+          : '当前已登录。也可以换一个账号登录。';
+      } catch (e) {}
+    })();
+
+    setMode('login');
+    usernameInput.focus();
+  </script>
+</body>
+</html>

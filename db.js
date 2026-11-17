@@ -1,9 +1,19 @@
+/**
+ * 数据库入口（多账号版）
+ * ---------------------------------------------------------------
+ * 每个账号一份独立的库：data/users/<id>/saudade.db
+ * 老的 data/saudade.db 会被第一个注册的账号继承。
+ *
+ * 上层代码照旧 `const db = require('./db')` 然后 db.prepare(...)，
+ * 这里用 AsyncLocalStorage 把「当前请求属于哪个账号」带下去，
+ * 所以各个 api 模块一行都不用改。
+ */
 const path = require('path');
 const fs = require('fs');
+const { AsyncLocalStorage } = require('async_hooks');
 
 // ---------------------------------------------------------------------------
-// 驱动选择：优先用 Node 自带的 node:sqlite（快、行为最接近原版）；
-// 拿不到（Node 18 / nodejs-mobile / 打包成 APK 时）就用 sql.js 的 WASM 兼容层。
+// 驱动选择：优先用 Node 自带的 node:sqlite；拿不到（Node 18 / APK）就用 sql.js
 // 强制指定：ROLEPHONE_SQLITE=sqljs / ROLEPHONE_SQLITE=native
 // ---------------------------------------------------------------------------
 const driverPref = String(process.env.ROLEPHONE_SQLITE || '').trim().toLowerCase();
@@ -28,28 +38,18 @@ if (driverPref === 'sqljs') {
 }
 
 const dataDir = path.join(__dirname, 'data');
+const usersRoot = path.join(dataDir, 'users');
+const legacyDbPath = path.join(dataDir, 'saudade.db');
+const legacyUploads = path.join(dataDir, 'uploads');
+
 fs.mkdirSync(dataDir, { recursive: true });
+fs.mkdirSync(usersRoot, { recursive: true });
 
-const dbPath = path.join(dataDir, 'saudade.db');
+const applySchema = require('./schema');
+const systemDbPath = path.join(dataDir, 'system.db');
 
-const db = new DatabaseSync(dbPath);
-
-console.log(
-  '[数据库] 驱动 = ' +
-    (driver === 'node:sqlite'
-      ? 'node:sqlite（Node 内置 SQLite）'
-      : 'sql.js（WebAssembly 兼容层）') +
-    '，库文件 = ' + dbPath
-);
-
-db.driver = driver;
-
-// 给上层（backup-api）用的两个能力：
-//   openDatabase(file, opts) —— 按当前驱动再开一个连接
-//   snapshotTo(source, file) —— 做一致性快照：先试 VACUUM INTO，不行就导出字节
 function openDatabase(file, options) {
-  // node:sqlite 对第二个参数很挑剔：显式传 undefined 会报
-  // TypeError: The "options" argument must be an object，所以只有真要选项时才带
+  // node:sqlite 对第二个参数很挑剔：显式传 undefined 会报类型错误
   return options ? new DatabaseSync(file, options) : new DatabaseSync(file);
 }
 
@@ -73,111 +73,221 @@ function snapshotTo(source, target) {
   }
 }
 
-db.openDatabase = openDatabase;
-db.snapshotTo = snapshotTo;
+// ---------------------------------------------------------------------------
+// 每个账号的目录与连接
+// ---------------------------------------------------------------------------
+const connections = new Map();
 
-// sql.js 路径下数据先写内存再 debounce 落盘，备份前先强制落一次盘；
-// node:sqlite 没有这个概念，flush() 只是空操作
-const driverFlush = typeof db.flush === 'function' ? db.flush.bind(db) : null;
+function userDir(userId) {
+  return path.join(usersRoot, String(userId));
+}
 
-db.flushNow = function flushNow() {
-  if (driverFlush) driverFlush();
-  return true;
-};
+function userDbPath(userId) {
+  return path.join(userDir(userId), 'saudade.db');
+}
 
-db.exec('PRAGMA journal_mode = WAL;');
+function contextUserId() {
+  const store = als.getStore();
+  return store ? store.userId : null;
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS model_profiles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    protocol TEXT NOT NULL DEFAULT 'openai',
-    base_url TEXT NOT NULL,
-    api_key TEXT NOT NULL,
-    model TEXT NOT NULL,
-    extra_headers TEXT NOT NULL DEFAULT '{}',
-    temperature REAL NOT NULL DEFAULT 0.8,
-    max_tokens INTEGER NOT NULL DEFAULT 2048,
-    stream INTEGER NOT NULL DEFAULT 1,
-    is_default INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-`);
+function uploadsDir(userId) {
+  const id = userId == null ? contextUserId() : userId;
+  if (!id) {
+    return path.join(dataDir, 'uploads');
+  }
+  const conn = openUserDatabase(id);
+  return path.join(path.dirname(conn.file), 'uploads');
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS app_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-`);
+function backupsDir(userId) {
+  const id = userId == null ? contextUserId() : userId;
+  if (!id) {
+    return path.join(dataDir, 'backups');
+  }
+  return path.join(userDir(id), 'backups');
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS user_personas (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    avatar TEXT NOT NULL DEFAULT '',
-    bio TEXT NOT NULL DEFAULT '',
-    persona TEXT NOT NULL DEFAULT '',
-    is_default INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-`);
+function ensureUserDirs(userId) {
+  const dir = userDir(userId);
+  fs.mkdirSync(path.join(dir, 'uploads'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'backups'), { recursive: true });
+  return dir;
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS characters (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    handle TEXT NOT NULL DEFAULT '',
-    avatar TEXT NOT NULL DEFAULT '',
-    persona TEXT NOT NULL DEFAULT '',
-    personality TEXT NOT NULL DEFAULT '',
-    background TEXT NOT NULL DEFAULT '',
-    speaking_style TEXT NOT NULL DEFAULT '',
-    opening_line TEXT NOT NULL DEFAULT '',
-    tags TEXT NOT NULL DEFAULT '',
-    birthday TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL DEFAULT 'manual',
-    source_card_json TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-`);
+function openUserDatabase(userId) {
+  const id = Number(userId);
+  if (connections.has(id)) {
+    return connections.get(id);
+  }
+  ensureUserDirs(id);
+  const file = userDbPath(id);
+  const conn = openDatabase(file);
+  applySchema(conn);
+  conn.userId = id;
+  conn.file = file;
+  connections.set(id, conn);
+  return conn;
+}
 
-function addColumnIfMissing(table, column, definition) {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!columns.some((item) => item.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+function listUserIds() {
+  try {
+    return fs.readdirSync(usersRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
+      .map((entry) => Number(entry.name))
+      .filter((id) => fs.existsSync(userDbPath(id)))
+      .sort((a, b) => a - b);
+  } catch (error) {
+    return [];
   }
 }
 
-addColumnIfMissing('characters', 'is_pinned', 'INTEGER NOT NULL DEFAULT 0');
-addColumnIfMissing('characters', 'last_message_at', 'TEXT');
-addColumnIfMissing('characters', 'last_message_preview', 'TEXT');
-addColumnIfMissing('characters', 'user_persona_id', 'INTEGER NOT NULL DEFAULT 0');
+// ---------------------------------------------------------------------------
+// 老数据继承：第一个账号拿走原来的库与图片
+// ---------------------------------------------------------------------------
+function hasLegacyData() {
+  return fs.existsSync(legacyDbPath);
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    character_id INTEGER NOT NULL,
-    role TEXT NOT NULL DEFAULT 'user',
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  );
-`);
+function adoptLegacyData(userId) {
+  const dir = ensureUserDirs(userId);
+  const moves = [];
 
-addColumnIfMissing('messages', 'meta_json', "TEXT NOT NULL DEFAULT ''");
-addColumnIfMissing('messages', 'edited_at', 'TEXT');
+  if (fs.existsSync(legacyDbPath)) {
+    moves.push([legacyDbPath, path.join(dir, 'saudade.db')]);
+    for (const suffix of ['-wal', '-shm']) {
+      if (fs.existsSync(legacyDbPath + suffix)) {
+        moves.push([legacyDbPath + suffix, path.join(dir, 'saudade.db' + suffix)]);
+      }
+    }
+  }
 
-db.exec(`
-  CREATE INDEX IF NOT EXISTS idx_messages_character
-  ON messages(character_id, id DESC);
-`);
+  for (const [from, to] of moves) {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(from, to);
+  }
+
+  if (fs.existsSync(legacyUploads)) {
+    const target = path.join(dir, 'uploads');
+    for (const name of fs.readdirSync(legacyUploads)) {
+      const src = path.join(legacyUploads, name);
+      if (!fs.statSync(src).isFile()) continue;
+      fs.renameSync(src, path.join(target, name));
+    }
+    fs.rmSync(legacyUploads, { recursive: true, force: true });
+  }
+
+  return true;
+}
+
+// 启动阶段（还没收到任何请求、不知道是哪个账号）有些模块会做一遍防御性的
+// 建表/补列。那些语句跟「谁在用」无关，给它们一个中立的 system.db，
+// 免得每个账号的库被启动代码顺手改一遍。
+let systemConnection = null;
+function systemDb() {
+  if (!systemConnection) {
+    systemConnection = openDatabase(systemDbPath);
+    applySchema(systemConnection);
+  }
+  return systemConnection;
+}
+
+// ---------------------------------------------------------------------------
+// 上下文路由
+// ---------------------------------------------------------------------------
+const als = new AsyncLocalStorage();
+
+const helpers = {
+  driver,
+  dataDir,
+  usersRoot,
+  userDir,
+  userDbPath,
+  ensureUserDirs,
+  uploadsDir,
+  backupsDir,
+  openUserDatabase,
+  openDatabase,
+  snapshotTo,
+  listUserIds,
+  hasLegacyData,
+  adoptLegacyData,
+  legacyDbPath,
+
+  /** 在该账号的库上执行 fn，期间所有 db.xxx 都落到它头上 */
+  runWithUser(userId, fn) {
+    const conn = openUserDatabase(userId);
+    return als.run({ userId: Number(userId), conn }, fn);
+  },
+
+  /** 当前上下文的账号 id，不在请求里则为 null */
+  currentUserId: contextUserId,
+
+  /** 当前上下文的连接（调试用） */
+  currentConnection() {
+    const store = als.getStore();
+    return store ? store.conn : null;
+  },
+
+  /** 把还没落盘的（sql.js）数据都刷下去 */
+  flushAll() {
+    const done = [];
+    for (const conn of connections.values()) {
+      if (typeof conn.flush === 'function') {
+        try {
+          conn.flush();
+        } catch (error) {
+          // 刷不下去也得让别的库继续
+        }
+      }
+      done.push(conn);
+    }
+    return done.length;
+  },
+
+  closeAll() {
+    helpers.flushAll();
+    for (const conn of connections.values()) {
+      try {
+        conn.close();
+      } catch (error) {
+        // 关不掉就算了，进程都要退了
+      }
+    }
+    connections.clear();
+  },
+};
+
+// 代理：SQL 方法都转发给「当前账号」的连接
+const db = new Proxy(helpers, {
+  get(target, prop, receiver) {
+    if (prop in target) {
+      return Reflect.get(target, prop, receiver);
+    }
+    const store = als.getStore();
+    const conn = store ? store.conn : systemDb();
+    const value = conn[prop];
+    return typeof value === 'function' ? value.bind(conn) : value;
+  },
+  has(target, prop) {
+    return prop in target;
+  },
+});
 
 module.exports = db;
 
-// 统一数据库迁移：必须放在 module.exports 之后，
-// 因为 migrate.js 会 require('./db')。CommonJS 缓存此时已把
-// module.exports 指向 db 实例，迁移脚本拿到的就是可用的连接。
-require('./migrate');
+// sql.js 落盘是定时导出的，进程退出前补一次
+const shutdown = () => {
+  try {
+    helpers.closeAll();
+  } catch (error) {
+    // 退出路径上别抛异常
+  }
+};
+process.on('exit', shutdown);
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    shutdown();
+    process.exit(0);
+  });
+}
