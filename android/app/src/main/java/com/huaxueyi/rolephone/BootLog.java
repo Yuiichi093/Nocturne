@@ -64,6 +64,24 @@ final class BootLog {
         }
     }
 
+    /** 读任意一份文本文件，读不到就返回空串 */
+    static synchronized String readFile(File file) {
+        if (file == null || !file.exists()) {
+            return "";
+        }
+        try (FileInputStream in = new FileInputStream(file)) {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[4096];
+            int count;
+            while ((count = in.read(chunk)) > 0) {
+                buffer.write(chunk, 0, count);
+            }
+            return new String(buffer.toByteArray(), "UTF-8");
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
     /** 进程起来时调：返回 true 表示上一次没走到页面就退出了 */
     static synchronized boolean begin(Context context) {
         boolean unfinished = new File(context.getFilesDir(), PENDING_FILE).exists();

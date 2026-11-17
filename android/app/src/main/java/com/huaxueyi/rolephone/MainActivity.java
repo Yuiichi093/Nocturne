@@ -97,7 +97,6 @@ public class MainActivity extends Activity {
     }
 
     private static boolean nodeStarted = false;
-    private static int nodeRetries = 0;
 
     private FrameLayout rootLayout;
     private TextView splashView;
@@ -747,18 +746,8 @@ public class MainActivity extends Activity {
             BootLog.append(this, "[shell] node 退出，code=" + code);
             appendLog("node 退出，code=" + code + "，跑了 " + (System.currentTimeMillis() - startedAt) + " 毫秒");
             Log.i(TAG, "node 退出，code=" + code);
-            if (!pageReady && nodeRetries < 1) {
-                // node 刚起就退了：再拉一次，能扛过一次偶发的启动失败
-                nodeRetries++;
-                appendLog("node 退出得太早，重试第 " + nodeRetries + " 次");
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException ignored) {
-                }
-                nodeStarted = false;
-                startNode(mainJs);
-                return;
-            }
+            // 这里以前会再调一次 startNode，但 node::Start 在同一个进程里只能进一次，
+            // 第二次会把整个进程带走（表现就是闪退）。所以只把日志摊出来。
             nodeStarted = false;
             runOnUiThread(() -> {
                 if (!pageReady && !logShown) {
@@ -789,6 +778,10 @@ public class MainActivity extends Activity {
             text.append(reason).append("\n\n");
         }
         text.append("—— 壳的启动记录 ——\n").append(BootLog.read(this)).append("\n");
+        String nodeLog = BootLog.readFile(new File(new File(getFilesDir(), "nodejs-project"), "boot.log"));
+        if (!nodeLog.isEmpty()) {
+            text.append("—— node 的日志 ——\n").append(nodeLog).append("\n");
+        }
         String crash = BootLog.readCrash(this);
         if (!crash.isEmpty()) {
             text.append("—— 上次崩溃 ——\n").append(crash).append("\n");

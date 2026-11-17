@@ -3,6 +3,13 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号按 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.6] - 2026-11-18
+
+### 修复
+- 闪退的真正原因：node 起不来时壳会再调一次 startNode，但 node::Start 在同一个进程里只能进一次，
+  第二次会把整个进程带走。现在不再重试，直接把日志摊出来。
+- 起不来的日志页会把 node 自己写的 boot.log 一起显示，方便看它到底报了什么错。
+
 ## [1.2.5] - 2026-11-18
 
 ### 修复
