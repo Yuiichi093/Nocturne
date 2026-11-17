@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -26,13 +27,26 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      # ubuntu 镜像里其实已经带了 android-34、build-tools 34、NDK 26.1 和 cmake 3.22.1，
+      # 以前每次都重新下一个七百多兆的 NDK，慢的时候能卡半小时。现在只补缺的。
       - name: 装 Android SDK 组件
+        timeout-minutes: 15
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
-            "ndk;26.1.10909125" "cmake;3.22.1"
+          SDK="$ANDROID_HOME"
+          need=""
+          [ -d "$SDK/platforms/android-34" ] || need="$need platforms;android-34"
+          [ -d "$SDK/build-tools/34.0.0" ] || need="$need build-tools;34.0.0"
+          [ -d "$SDK/ndk/26.1.10909125" ] || need="$need ndk;26.1.10909125"
+          [ -d "$SDK/cmake/3.22.1" ] || need="$need cmake;3.22.1"
+          echo "镜像自带的 NDK："; ls "$SDK/ndk" || true
+          echo "镜像自带的 cmake："; ls "$SDK/cmake" || true
+          if [ -z "$need" ]; then
+            echo "需要的组件都在，跳过下载"
+            exit 0
+          fi
+          echo "缺这几样，开始装：$need"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" $need
 
       - name: 下载 libnode（Node 18 for Android）
         run: |

@@ -183,8 +183,7 @@
   <a href="/" onclick="event.preventDefault(); nocturneBack()">← 返回</a>
   <h1>模型 API</h1>
   <p class="sub">
-    先支持 OpenAI 兼容格式。Base URL 一般填到 <code>/v1</code>，
-    例如 <code>https://api.example.com/v1</code>。测试会消耗少量 token。
+    先支持 OpenAI 兼容格式。Base URL 一般填到 <code>/v1</code> 结尾，测试会消耗少量 token。
   </p>
 
   <form class="card" id="modelForm">
@@ -192,7 +191,7 @@
 
     <div class="field">
       <label>名称</label>
-      <input id="name" placeholder="例如：A家-聊天强模型" required>
+      <input id="name" placeholder="给这个模型起个名字" required>
     </div>
 
     <div class="field">
@@ -207,7 +206,7 @@
 
     <div class="field">
       <label>模型名</label>
-      <input id="model" placeholder="例如：gpt-4o-mini" required>
+      <input id="model" placeholder="模型名" required>
       <button class="ghost" id="catalogBtn" type="button">拉取模型列表</button>
       <div class="catalog" id="catalogList"></div>
     </div>
