@@ -828,6 +828,33 @@ require('./backup-worker')(db);
 // 朋友圈：角色定时自主发动态 / 评论
 require('./moment-ai').startAutoPilot();
 
-app.listen(PORT, '127.0.0.1', () => {
+const httpServer = app.listen(PORT, '127.0.0.1', () => {
   console.log('Nocturne 已启动：http://127.0.0.1:' + PORT);
+});
+
+httpServer.on('error', (e) => {
+  console.error('监听失败：' + (e && e.stack ? e.stack : e));
+});
+
+// 诊断：node 有时会在启动后自己退出（exit code 0），留个心跳看它到底还在不在。
+// 这个定时的 interval 同时也是让事件循环保持活跃的把手。
+let heartbeat = 0;
+setInterval(() => {
+  heartbeat++;
+  // 只在前一分钟留痕，之后安静地守着事件循环，免得 boot.log 一直长
+  if (process.uptime() < 60) {
+    console.log('心跳 ' + heartbeat + '，已跑 ' + Math.round(process.uptime())
+      + ' 秒，listening=' + httpServer.listening);
+  }
+}, 10 * 1000);
+
+process.on('beforeExit', (code) => {
+  // 正常情况不该走到这里：还有 HTTP 服务在跑，事件循环不该空
+  let handles = -1;
+  try {
+    handles = process._getActiveHandles().length;
+  } catch (e) {
+    handles = -2;
+  }
+  console.log('beforeExit code=' + code + '，活跃句柄 ' + handles);
 });

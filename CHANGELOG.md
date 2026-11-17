@@ -3,6 +3,13 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号按 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.7] - 2026-11-18
+
+### 修复
+- node 起好服务后约一秒就自己退出（exit code 0）：listen 返回的 server 没被引用住，
+  事件循环空了就走退出流程。现在把 server 存下来，并加了个心跳定时器守住事件循环。
+- 加了监听失败与 beforeExit 的日志，再出现异常退出能直接看到原因。
+
 ## [1.2.6] - 2026-11-18
 
 ### 修复
