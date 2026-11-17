@@ -1,0 +1,36 @@
+# 运行数据：聊天记录、上传的图、备份、日志都不进仓库
+data/
+uploads/
+backups/
+logs/
+*.db
+*.db-wal
+*.db-shm
+
+# 依赖
+node_modules/
+
+# 开发时的私人笔记（想公开就把这两行删掉）
+修复说明.md
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# 早期一次性迁移脚本，不参与版本控制
+_legacy/
+
+# Android 构建产物
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/libnode/bin/*/libnode.so
+android/app/libnode/include/
+android/app/src/main/assets/nodejs-project/
+android/app/src/main/assets/*.zip
+*.iml
+android/.staging/

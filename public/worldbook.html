@@ -1,0 +1,1002 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nocturne · 世界书</title>
+  <style>
+    :root {
+      --bg: #f7f7f7;
+      --ink: #111;
+      --muted: #777;
+      --line: rgba(0,0,0,.1);
+      --card: #fff;
+      --safe: env(safe-area-inset-bottom, 0px);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      padding: 18px 18px calc(110px + var(--safe));
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Noto Sans SC", "PingFang SC", sans-serif;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .back {
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: transparent;
+      color: var(--ink);
+      font-size: 18px;
+    }
+
+    h1 {
+      flex: 1;
+      margin: 0;
+      font-size: 28px;
+      font-weight: 500;
+    }
+
+    .world-label {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .toolbar {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .toolbar button {
+      padding: 11px 14px;
+      border: 1px solid var(--ink);
+      border-radius: 15px;
+      background: var(--ink);
+      color: var(--bg);
+      font: inherit;
+      font-size: 12px;
+    }
+
+    .toolbar button.ghost {
+      background: transparent;
+      color: var(--ink);
+    }
+
+    .category-block {
+      margin-bottom: 16px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--card);
+    }
+
+    .category-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .category-head h2 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .category-head span {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .entry-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 11px 2px;
+      border: 0;
+      border-top: 1px solid var(--line);
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+    }
+
+    .entry-row:first-child {
+      border-top: 0;
+    }
+
+    .entry-row.selected {
+      color: var(--bg);
+      background: var(--ink);
+      border-radius: 10px;
+      padding-left: 8px;
+      padding-right: 8px;
+    }
+
+    .entry-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .entry-badges {
+      display: flex;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 9px;
+      white-space: nowrap;
+    }
+
+    .entry-row.selected .entry-badges {
+      color: var(--bg);
+      opacity: .7;
+    }
+
+    .empty {
+      padding: 36px 18px;
+      border: 1px dashed var(--line);
+      border-radius: 22px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.8;
+      text-align: center;
+    }
+
+    .selection-bar {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: calc(10px + var(--safe));
+      z-index: 50;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--card);
+      box-shadow: 0 14px 40px rgba(0,0,0,.16);
+    }
+
+    .selection-bar.open {
+      display: flex;
+    }
+
+    .selection-bar span {
+      flex: 1;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .selection-bar button {
+      padding: 8px 10px;
+      border: 1px solid var(--ink);
+      border-radius: 12px;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-size: 11px;
+    }
+
+    .selection-bar button.primary {
+      background: var(--ink);
+      color: var(--bg);
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: none;
+      align-items: flex-end;
+      background: rgba(0,0,0,.35);
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      width: 100%;
+      max-height: 88dvh;
+      overflow-y: auto;
+      padding: 18px 18px calc(22px + var(--safe));
+      border-radius: 28px 28px 0 0;
+      background: var(--bg);
+    }
+
+    .modal h2 {
+      margin: 0 0 14px;
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .field input,
+    .field textarea {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--card);
+      color: var(--ink);
+      outline: none;
+      font: inherit;
+    }
+
+    .field textarea {
+      min-height: 130px;
+      resize: vertical;
+      line-height: 1.7;
+    }
+
+    .check-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 10px 0;
+      font-size: 13px;
+    }
+
+    .check-row input {
+      width: 18px;
+      height: 18px;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .modal-actions button {
+      flex: 1;
+      padding: 13px;
+      border: 1px solid var(--ink);
+      border-radius: 15px;
+      background: var(--ink);
+      color: var(--bg);
+      font: inherit;
+    }
+
+    .modal-actions button.ghost {
+      background: transparent;
+      color: var(--ink);
+    }
+
+    #status {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <button class="back" onclick="nocturneBack()" type="button">‹</button>
+    <h1>世界书</h1>
+  </header>
+
+  <p class="world-label" id="worldLabel">当前世界：加载中...</p>
+
+  <div class="toolbar">
+    <button class="ghost" id="importBtn" type="button">导入酒馆世界书</button>
+    <button class="ghost" id="copyWorldBtn" type="button">从其他世界复制</button>
+    <button id="addBtn" type="button">+ 新建条目</button>
+  </div>
+
+  <input id="importFile" type="file" accept=".json,application/json" hidden>
+
+  <div id="categoryList">加载中...</div>
+
+  <div class="selection-bar" id="selectionBar">
+    <span id="selectionCount">已选 0 条</span>
+    <button id="selectAllBtn" type="button">全选</button>
+    <button id="categorySelectedBtn" type="button">分类</button>
+    <button class="primary" id="deleteSelectedBtn" type="button">删除</button>
+    <button id="cancelSelectionBtn" type="button">取消</button>
+  </div>
+
+  <div class="modal-backdrop" id="categoryBackdrop">
+    <div class="modal">
+      <h2>批量分类</h2>
+      <p class="world-label" id="categorySelectedCount">已选 0 条</p>
+
+      <div class="field">
+        <label>已有分类</label>
+        <div class="category-quick-list" id="categoryQuickList"></div>
+      </div>
+
+      <div class="field">
+        <label>新建分类</label>
+        <input id="batchCategoryInput" placeholder="输入新分类名">
+      </div>
+
+      <div class="modal-actions">
+        <button id="applyCategoryBtn" type="button">应用分类</button>
+        <button class="ghost" id="cancelCategoryBtn" type="button">取消</button>
+      </div>
+
+      <div id="categoryStatus"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="copyBackdrop">
+    <div class="modal">
+      <h2>从其他世界复制</h2>
+      <div id="copyList">加载中...</div>
+      <div class="modal-actions">
+        <button id="copyConfirmBtn" type="button">导入所选</button>
+        <button class="ghost" id="copyCancelBtn" type="button">取消</button>
+      </div>
+      <div id="copyStatus"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal">
+      <h2 id="modalTitle">新建世界书条目</h2>
+
+      <form id="entryForm">
+        <div class="field">
+          <label>分类</label>
+          <input id="category" list="categoryOptions" placeholder="例如：地点、人物、设定">
+          <datalist id="categoryOptions"></datalist>
+        </div>
+
+        <div class="field">
+          <label>标题</label>
+          <input id="title" required>
+        </div>
+
+        <div class="field">
+          <label>关键词（逗号分隔）</label>
+          <input id="keys" placeholder="例如：云京, 雨夜, 旧公寓">
+        </div>
+
+        <div class="field">
+          <label>内容</label>
+          <textarea id="content"></textarea>
+        </div>
+
+        <div class="field">
+          <label>优先级</label>
+          <input id="priority" type="number" value="0">
+        </div>
+
+        <div class="check-row">
+          <span>常驻条目</span>
+          <input id="constant" type="checkbox">
+        </div>
+
+        <div class="check-row">
+          <span>启用</span>
+          <input id="enabled" type="checkbox" checked>
+        </div>
+
+        <div class="modal-actions">
+          <button type="submit">保存</button>
+          <button class="ghost" id="cancelBtn" type="button">取消</button>
+        </div>
+
+        <div id="status">等待操作。</div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    let entries = [];
+    let editingId = null;
+    let selectionMode = false;
+    let selectedIds = new Set();
+    let longPressTimer = null;
+    let longPressed = false;
+    const expandedCategories = new Set();
+
+    function escapeHtml(text) {
+      return String(text || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    async function loadWorldLabel() {
+      try {
+        const response = await fetch('/api/worlds/active');
+        const world = await response.json();
+        if (response.ok) {
+          $('worldLabel').textContent = '当前世界：' + world.name;
+        }
+      } catch (e) {}
+    }
+
+    async function loadEntries() {
+      try {
+        const response = await fetch('/api/worldbook');
+        entries = await response.json();
+        renderCategories();
+        renderCategoryOptions();
+      } catch (error) {
+        $('categoryList').innerHTML =
+          '<div class="empty">加载失败：' + escapeHtml(error.message) + '</div>';
+      }
+    }
+
+    function renderCategoryOptions() {
+      const categories = Array.from(new Set(
+        entries.map((entry) => entry.category || '未分类')
+      ));
+
+      $('categoryOptions').innerHTML = categories
+        .map((cat) => '<option value="' + escapeHtml(cat) + '"></option>')
+        .join('');
+    }
+
+    function renderCategories() {
+      if (!entries.length) {
+        $('categoryList').innerHTML =
+          '<div class="empty">还没有世界书条目。</div>';
+        return;
+      }
+
+      const groups = new Map();
+
+      entries.forEach((entry) => {
+        const cat = entry.category || '未分类';
+        if (!groups.has(cat)) groups.set(cat, []);
+        groups.get(cat).push(entry);
+      });
+
+      $('categoryList').innerHTML = Array.from(groups.entries()).map(
+        ([category, items]) => `
+          <details
+            class="category-block"
+            data-category="${escapeHtml(category)}"
+            ${expandedCategories.has(category) ? 'open' : ''}
+          >
+            <summary class="category-head">
+              <h2>${escapeHtml(category)}</h2>
+              <span>${items.length} 条</span>
+            </summary>
+            <div>
+              ${items.map((entry) => {
+                const selected = selectedIds.has(Number(entry.id));
+                return `
+                  <button
+                    class="entry-row ${selected ? 'selected' : ''}"
+                    data-entry-id="${entry.id}"
+                    type="button"
+                  >
+                    <span class="entry-title">${escapeHtml(entry.title)}</span>
+                    <span class="entry-badges">
+                      ${entry.constant ? '常驻' : ''}
+                      ${entry.enabled ? '' : '停用'}
+                    </span>
+                  </button>
+                `;
+              }).join('')}
+            </div>
+          </details>
+        `
+      ).join('');
+
+      document.querySelectorAll('#categoryList details.category-block').forEach((details) => {
+        details.addEventListener('toggle', () => {
+          const category = details.dataset.category;
+          if (details.open) {
+            expandedCategories.add(category);
+          } else {
+            expandedCategories.delete(category);
+          }
+        });
+      });
+
+      updateSelectionBar();
+    }
+
+    function updateSelectionBar() {
+      $('selectionBar').classList.toggle('open', selectionMode);
+      $('selectionCount').textContent = '已选 ' + selectedIds.size + ' 条';
+    }
+
+    function enterSelection(id) {
+      selectionMode = true;
+      if (id) selectedIds.add(Number(id));
+      renderCategories();
+    }
+
+    function toggleSelection(id) {
+      const numberId = Number(id);
+      if (selectedIds.has(numberId)) {
+        selectedIds.delete(numberId);
+      } else {
+        selectedIds.add(numberId);
+      }
+      renderCategories();
+    }
+
+    function exitSelection() {
+      selectionMode = false;
+      selectedIds.clear();
+      renderCategories();
+    }
+
+    $('categoryList').addEventListener('pointerdown', (event) => {
+      const row = event.target.closest('[data-entry-id]');
+      if (!row) return;
+
+      longPressed = false;
+      longPressTimer = setTimeout(() => {
+        longPressed = true;
+        enterSelection(row.dataset.entryId);
+      }, 650);
+    });
+
+    ['pointerup', 'pointercancel', 'pointermove'].forEach((name) => {
+      $('categoryList').addEventListener(name, () => {
+        clearTimeout(longPressTimer);
+      });
+    });
+
+    $('categoryList').addEventListener('click', (event) => {
+      const row = event.target.closest('[data-entry-id]');
+      if (!row) return;
+
+      if (longPressed) {
+        longPressed = false;
+        return;
+      }
+
+      if (selectionMode) {
+        toggleSelection(row.dataset.entryId);
+        return;
+      }
+
+      const entry = entries.find(
+        (item) => Number(item.id) === Number(row.dataset.entryId)
+      );
+
+      if (entry) openModal(entry);
+    });
+
+    $('selectAllBtn').addEventListener('click', () => {
+      entries.forEach((entry) => selectedIds.add(Number(entry.id)));
+      renderCategories();
+    });
+
+    function openCategoryModal() {
+      if (!selectedIds.size) return;
+
+      $('categorySelectedCount').textContent =
+        '已选 ' + selectedIds.size + ' 条';
+
+      const categories = Array.from(new Set(
+        entries.map((entry) => entry.category || '未分类')
+      ));
+
+      $('categoryQuickList').innerHTML = categories
+        .map((cat) => `
+          <button data-batch-category="${escapeHtml(cat)}" type="button">
+            ${escapeHtml(cat)}
+          </button>
+        `)
+        .join('');
+
+      $('batchCategoryInput').value = '';
+      $('categoryStatus').textContent = '';
+      $('categoryBackdrop').classList.add('open');
+    }
+
+    function closeCategoryModal() {
+      $('categoryBackdrop').classList.remove('open');
+    }
+
+    async function applyCategory(category) {
+      const name = String(category || '').trim();
+      if (!name) {
+        $('categoryStatus').textContent = '分类名不能为空';
+        return;
+      }
+
+      try {
+        $('categoryStatus').textContent = '应用中...';
+
+        const response = await fetch('/api/worldbook/bulk-category', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ids: Array.from(selectedIds),
+            category: name
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '批量分类失败');
+        }
+
+        closeCategoryModal();
+        exitSelection();
+        await loadEntries();
+      } catch (error) {
+        $('categoryStatus').textContent = '失败：' + error.message;
+      }
+    }
+
+    $('categorySelectedBtn').addEventListener('click', openCategoryModal);
+    $('cancelCategoryBtn').addEventListener('click', closeCategoryModal);
+
+    $('categoryBackdrop').addEventListener('click', (event) => {
+      if (event.target === $('categoryBackdrop')) closeCategoryModal();
+    });
+
+    $('categoryQuickList').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-batch-category]');
+      if (!button) return;
+      applyCategory(button.dataset.batchCategory);
+    });
+
+    $('applyCategoryBtn').addEventListener('click', () => {
+      applyCategory($('batchCategoryInput').value);
+    });
+
+    $('cancelSelectionBtn').addEventListener('click', exitSelection);
+
+    $('deleteSelectedBtn').addEventListener('click', async () => {
+      if (!selectedIds.size) return;
+      if (!confirm('删除选中的 ' + selectedIds.size + ' 条？')) return;
+
+      try {
+        const response = await fetch('/api/worldbook/bulk-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: Array.from(selectedIds) })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '删除失败');
+        }
+
+        exitSelection();
+        await loadEntries();
+      } catch (error) {
+        alert('删除失败：' + error.message);
+      }
+    });
+
+    function openModal(entry) {
+      editingId = entry ? entry.id : null;
+      $('modalTitle').textContent = entry ? '编辑世界书条目' : '新建世界书条目';
+      $('category').value = entry ? entry.category || '未分类' : '';
+      $('title').value = entry ? entry.title || '' : '';
+      $('keys').value = entry ? entry.keys || '' : '';
+      $('content').value = entry ? entry.content || '' : '';
+      $('priority').value = entry ? entry.priority || 0 : 0;
+      $('constant').checked = entry ? !!entry.constant : false;
+      $('enabled').checked = entry ? !!entry.enabled : true;
+      $('status').textContent = '等待操作。';
+      $('modalBackdrop').classList.add('open');
+    }
+
+    function closeModal() {
+      $('modalBackdrop').classList.remove('open');
+      editingId = null;
+    }
+
+    $('addBtn').addEventListener('click', () => openModal(null));
+    $('cancelBtn').addEventListener('click', closeModal);
+    $('modalBackdrop').addEventListener('click', (event) => {
+      if (event.target === $('modalBackdrop')) closeModal();
+    });
+
+    $('entryForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const payload = {
+        category: $('category').value.trim() || '未分类',
+        title: $('title').value.trim(),
+        keys: $('keys').value.trim(),
+        content: $('content').value.trim(),
+        priority: Number($('priority').value || 0),
+        constant: $('constant').checked,
+        enabled: $('enabled').checked
+      };
+
+      if (!payload.title) {
+        $('status').textContent = '标题必填';
+        return;
+      }
+
+      try {
+        $('status').textContent = '保存中...';
+
+        const url = editingId
+          ? '/api/worldbook/' + editingId
+          : '/api/worldbook';
+
+        const method = editingId ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '保存失败');
+        }
+
+        closeModal();
+        await loadEntries();
+      } catch (error) {
+        $('status').textContent = '保存失败：' + error.message;
+      }
+    });
+
+    let copySelectedIds = new Set();
+
+    async function openCopyWorld() {
+      try {
+        $('copyList').textContent = '加载中...';
+        $('copySelectedIds') && ($('copySelectedIds').value = '');
+        $('copyStatus').textContent = '';
+
+        const response = await fetch('/api/worldbook/other-worlds');
+        const worlds = await response.json();
+
+        if (!worlds.length) {
+          $('copyList').innerHTML = '<div class="empty">没有其他世界观。</div>';
+        } else {
+          const html = worlds.map((world) => {
+            if (!world.entries.length) return '';
+
+            return `
+              <section class="copy-world">
+                <h3>${escapeHtml(world.name)}</h3>
+                ${world.entries.map((entry) => `
+                  <label class="copy-entry">
+                    <input type="checkbox" data-copy-id="${entry.id}">
+                    <span>
+                      ${escapeHtml(entry.title)}
+                      <small>${escapeHtml(entry.category || '未分类')}</small>
+                    </span>
+                  </label>
+                `).join('')}
+              </section>
+            `;
+          }).join('');
+
+          $('copyList').innerHTML = html || '<div class="empty">没有可复制的条目。</div>';
+        }
+
+        copySelectedIds = new Set();
+        $('copyBackdrop').classList.add('open');
+      } catch (error) {
+        alert('加载失败：' + error.message);
+      }
+    }
+
+    $('copyWorldBtn').addEventListener('click', openCopyWorld);
+    $('copyCancelBtn').addEventListener('click', () => {
+      $('copyBackdrop').classList.remove('open');
+    });
+
+    $('copyBackdrop').addEventListener('click', (event) => {
+      if (event.target === $('copyBackdrop')) {
+        $('copyBackdrop').classList.remove('open');
+      }
+    });
+
+    $('copyList').addEventListener('change', (event) => {
+      const input = event.target.closest('[data-copy-id]');
+      if (!input) return;
+
+      const id = Number(input.dataset.copyId);
+      if (input.checked) copySelectedIds.add(id);
+      else copySelectedIds.delete(id);
+    });
+
+    $('copyConfirmBtn').addEventListener('click', async () => {
+      if (!copySelectedIds.size) {
+        $('copyStatus').textContent = '先勾选要复制的条目';
+        return;
+      }
+
+      try {
+        $('copyStatus').textContent = '导入中...';
+
+        const response = await fetch('/api/worldbook/import-selected', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: Array.from(copySelectedIds) })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '复制失败');
+        }
+
+        $('copyBackdrop').classList.remove('open');
+        alert('已复制 ' + data.imported + ' 条到当前世界');
+        await loadEntries();
+      } catch (error) {
+        $('copyStatus').textContent = '复制失败：' + error.message;
+      }
+    });
+
+    $('importBtn').addEventListener('click', () => {
+      $('importFile').click();
+    });
+
+    $('importFile').addEventListener('change', async () => {
+      const file = $('importFile').files && $('importFile').files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+
+        const response = await fetch('/api/worldbook/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || '导入失败');
+        }
+
+        alert('导入成功：' + result.imported + ' 条');
+        await loadEntries();
+      } catch (error) {
+        alert('导入失败：' + error.message);
+      }
+
+      $('importFile').value = '';
+    });
+
+    loadWorldLabel();
+    loadEntries();
+  </script>
+  <script src="/back-nav.js"></script>
+</body>
+</html>
+<style>
+.category-quick-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.category-quick-list button {
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#categoryStatus {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+</style>
+<style>
+.category-quick-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.category-quick-list button {
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#categoryStatus {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+</style>
+<style>
+.category-block summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.category-block summary::-webkit-details-marker {
+  display: none;
+}
+
+.copy-world {
+  margin-bottom: 14px;
+}
+
+.copy-world h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.copy-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.copy-entry input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--ink);
+}
+
+.copy-entry span {
+  flex: 1;
+}
+
+#copyStatus {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+</style>

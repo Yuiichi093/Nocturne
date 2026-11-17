@@ -1,0 +1,495 @@
+'use strict';
+// 生图：接 OpenAI 兼容的 /images/generations。
+// 生成完的图存进 data/uploads，和普通上传的图一样能长期用。
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+function register(app, db) {
+  const uploadDir = path.join(__dirname, 'data', 'uploads');
+  fs.mkdirSync(uploadDir, { recursive: true });
+
+  function cleanText(value) {
+    return String(value == null ? '' : value).trim();
+  }
+
+  function parseHeaders(text) {
+    try {
+      return JSON.parse(text || '{}') || {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function imageModel(id) {
+    if (id) {
+      return db.prepare('SELECT * FROM model_profiles WHERE id = ?').get(id);
+    }
+
+    return db.prepare(`
+      SELECT * FROM model_profiles
+      WHERE is_image = 1
+      ORDER BY is_default DESC, id DESC
+      LIMIT 1
+    `).get();
+  }
+
+  // 各家的 base_url 写法不一：有的带 /v1，有的不带，有的直接给到接口
+  function buildUrls(baseUrl, endpoint) {
+    const clean = cleanText(baseUrl).replace(/\/+$/, '');
+    const tail = '/' + endpoint;
+
+    if (clean.endsWith(tail)) return [clean];
+
+    if (/\/v\d+$/.test(clean)) return [clean + tail];
+
+    return [clean + '/v1' + tail, clean + tail];
+  }
+
+  function saveImage(buffer, ext) {
+    const safeExt = ['.png', '.jpg', '.jpeg', '.webp'].includes(ext)
+      ? ext
+      : '.png';
+    const name = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + safeExt;
+    fs.writeFileSync(path.join(uploadDir, name), buffer);
+    return '/uploads/' + name;
+  }
+
+  // 参考图：角色自己的（可以多张）+ 它的用户人设的（也可以多张）
+  function referenceImages(characterId) {
+    const files = [];
+
+    function push(url) {
+      const clean = cleanText(url);
+
+      if (!clean.startsWith('/uploads/')) return;
+
+      const file = path.join(uploadDir, path.basename(clean));
+
+      if (!fs.existsSync(file)) return;
+
+      if (files.some((item) => item.file === file)) return;
+
+      files.push({
+        file,
+        name: path.basename(file),
+        mime: 'image/' + (path.extname(file).slice(1).toLowerCase() || 'png')
+          .replace('jpg', 'jpeg')
+      });
+    }
+
+    function pushOwner(ownerType, ownerId, legacyUrl) {
+      const rows = db.prepare(`
+        SELECT image_url FROM ref_images
+        WHERE owner_type = ? AND owner_id = ?
+        ORDER BY sort ASC, id ASC
+      `).all(ownerType, ownerId);
+
+      if (rows.length) {
+        rows.forEach((row) => push(row.image_url));
+      } else {
+        push(legacyUrl);
+      }
+    }
+
+    if (characterId) {
+      const character = db.prepare('SELECT * FROM characters WHERE id = ?')
+        .get(characterId);
+
+      if (character) {
+        pushOwner('character', character.id, character.ref_image);
+
+        let persona = null;
+
+        if (Number(character.user_persona_id || 0) > 0) {
+          persona = db.prepare('SELECT * FROM user_personas WHERE id = ?')
+            .get(character.user_persona_id);
+        }
+
+        if (!persona) {
+          persona = db.prepare(`
+            SELECT * FROM user_personas
+            ORDER BY is_default DESC, id DESC
+            LIMIT 1
+          `).get();
+        }
+
+        if (persona) pushOwner('persona', persona.id, persona.ref_image);
+      }
+    }
+
+    // 一下子塞太多参考图有的家会拒，最多四张
+    return files.slice(0, 4);
+  }
+
+  // 带参考图的请求：OpenAI 的 /images/edits 走 multipart
+  async function requestImageWithReference(modelRow, prompt, size, refs) {
+    const headers = { ...parseHeaders(modelRow.extra_headers) };
+
+    if (!headers.Authorization && !headers.authorization) {
+      headers.Authorization = 'Bearer ' + modelRow.api_key;
+    }
+
+    const referencePrompt =
+      '参考图里是人物外貌参考（发型、瞳色、服装、气质）。' +
+      '按这些特征来画，不要照抄姿势：' + prompt;
+
+    const urls = buildUrls(modelRow.base_url, 'images/edits');
+    let lastError = '';
+
+    for (const url of urls) {
+      const form = new FormData();
+      form.append('model', modelRow.model);
+      form.append('prompt', referencePrompt);
+      form.append('n', '1');
+      form.append('size', size || '1024x1024');
+
+      refs.forEach((ref, index) => {
+        const buffer = fs.readFileSync(ref.file);
+        const blob = new Blob([buffer], { type: ref.mime });
+
+        // 有的家认 image，有的认 image[]。第一张两个字段都给，
+        // 后面的只给 image[]，免得同一张图重复上传两遍。
+        if (index === 0) {
+          form.append('image', blob, ref.name);
+        }
+
+        form.append('image[]', blob, ref.name);
+      });
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 180000);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: form,
+          signal: controller.signal
+        });
+
+        const text = await response.text();
+
+        if (response.ok) {
+          let data = null;
+          try {
+            data = JSON.parse(text);
+          } catch (e) {}
+
+          const first = data && data.data && data.data[0];
+
+          if (first && first.b64_json) {
+            return { url: saveImage(Buffer.from(first.b64_json, 'base64'), '.png') };
+          }
+
+          if (first && first.url) {
+            const imageResponse = await fetch(first.url);
+            const buffer = Buffer.from(await imageResponse.arrayBuffer());
+            return { url: saveImage(buffer, '.png') };
+          }
+
+          lastError = '参考图接口返回格式不认识';
+        } else {
+          lastError = text.slice(0, 300);
+
+          if (response.status !== 404 && response.status !== 405 && response.status !== 400) {
+            throw new Error(lastError);
+          }
+        }
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error('生图超时');
+        lastError = error.message || lastError;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    throw new Error(lastError || '参考图接口不可用');
+  }
+
+  // 1x1 的小图，用来探「能不能吃参考图」
+  const TINY_PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64'
+  );
+
+  // 探一遍：文生图 / 参考图（edits）两条路各自通不通
+  async function probeImage(modelRow) {
+    const headers = { ...parseHeaders(modelRow.extra_headers) };
+
+    if (!headers.Authorization && !headers.authorization) {
+      headers.Authorization = 'Bearer ' + modelRow.api_key;
+    }
+
+    const lines = [];
+    let generationOk = false;
+
+    // --- 一条：纯文字生图 ---
+    const genUrls = buildUrls(modelRow.base_url, 'images/generations');
+    let genError = '';
+
+    for (const url of genUrls) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 120000);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: modelRow.model,
+            prompt: '一颗放在白桌上的红苹果，简单背景',
+            n: 1,
+            size: '1024x1024'
+          }),
+          signal: controller.signal
+        });
+
+        const text = await response.text();
+
+        if (!response.ok) {
+          genError = text.slice(0, 400);
+
+          if (response.status === 404 || response.status === 405) continue;
+
+          throw new Error(genError);
+        }
+
+        let data = null;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {}
+
+        const first = data && data.data && data.data[0];
+
+        if (!first) {
+          throw new Error('返回里没有图片数据：' + text.slice(0, 200));
+        }
+
+        generationOk = true;
+        lines.push('生图：可用（' + (first.url ? '返回图片链接' : '返回 base64') + '）');
+        break;
+      } catch (error) {
+        genError = error.name === 'AbortError' ? '请求超时' : (error.message || genError);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    if (!generationOk) {
+      throw new Error(genError || '生图接口不可用');
+    }
+
+    // --- 另一条：带参考图（/images/edits） ---
+    const editUrls = buildUrls(modelRow.base_url, 'images/edits');
+    let editAnswer = '';
+    let editError = '';
+
+    for (const url of editUrls) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 120000);
+
+      try {
+        const form = new FormData();
+        form.append('model', modelRow.model);
+        form.append('prompt', '把这张图的背景改成浅蓝色');
+        form.append('n', '1');
+        form.append('size', '1024x1024');
+        const blob = new Blob([TINY_PNG], { type: 'image/png' });
+        form.append('image', blob, 'ref.png');
+        form.append('image[]', blob, 'ref.png');
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: form,
+          signal: controller.signal
+        });
+
+        const text = await response.text();
+
+        if (response.ok) {
+          let data = null;
+          try {
+            data = JSON.parse(text);
+          } catch (e) {}
+
+          const first = data && data.data && data.data[0];
+
+          if (first) {
+            editAnswer = '参考图：可用（/images/edits 能接图改图）';
+            break;
+          }
+
+          editError = '接口通了但没返回图：' + text.slice(0, 200);
+          continue;
+        }
+
+        editError = text.slice(0, 300);
+
+        if (response.status === 404 || response.status === 405) {
+          editError = '这家没有 /images/edits 接口';
+          continue;
+        }
+
+        if (response.status === 400) {
+          editError = '这家不支持带图改图（400）：' + text.slice(0, 200);
+          break;
+        }
+
+        break;
+      } catch (error) {
+        editError = error.name === 'AbortError' ? '请求超时' : error.message;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    lines.push(editAnswer || ('参考图：用不了（' + (editError || '未知原因') + '）'));
+
+    return { ok: true, reply: lines.join('\n') };
+  }
+
+  register.probe = probeImage;
+
+  async function requestImage(modelRow, prompt, size) {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...parseHeaders(modelRow.extra_headers)
+    };
+
+    if (!headers.Authorization && !headers.authorization) {
+      headers.Authorization = 'Bearer ' + modelRow.api_key;
+    }
+
+    const payload = {
+      model: modelRow.model,
+      prompt,
+      n: 1,
+      size: size || '1024x1024'
+    };
+
+    let lastError = '';
+
+    for (const url of buildUrls(modelRow.base_url, 'images/generations')) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 180000);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+
+        const text = await response.text();
+
+        if (response.ok) {
+          let data = null;
+
+          try {
+            data = JSON.parse(text);
+          } catch (e) {}
+
+          const first = data && data.data && data.data[0];
+
+          if (!first) {
+            throw new Error('生图接口返回里没有图片');
+          }
+
+          if (first.b64_json) {
+            return saveImage(
+              Buffer.from(first.b64_json, 'base64'),
+              '.png'
+            );
+          }
+
+          if (first.url) {
+            const imageResponse = await fetch(first.url);
+            const buffer = Buffer.from(await imageResponse.arrayBuffer());
+            return saveImage(buffer, '.png');
+          }
+
+          throw new Error('生图接口返回格式不认识');
+        }
+
+        lastError = text.slice(0, 300);
+
+        // 404 / 405 多半是路径不对，换下一个候选地址
+        if (response.status !== 404 && response.status !== 405) {
+          throw new Error(lastError);
+        }
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          throw new Error('生图超时');
+        }
+
+        if (error.message && error.message !== lastError) {
+          // 网络错误也值得再试下一个地址，但只在没拿到过响应时
+          lastError = error.message;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    throw new Error('生图失败：' + (lastError || '没有可用的接口地址'));
+  }
+
+  app.get('/api/image-model', (req, res) => {
+    const row = imageModel();
+
+    res.json(row ? {
+      id: row.id,
+      name: row.name,
+      model: row.model
+    } : null);
+  });
+
+  app.post('/api/generate-image', async (req, res) => {
+    const prompt = cleanText(req.body && req.body.prompt);
+
+    if (!prompt) {
+      return res.status(400).json({ error: '先写一句画面描述' });
+    }
+
+    const modelRow = imageModel(Number(req.body && req.body.model_id || 0));
+
+    if (!modelRow) {
+      return res.status(400).json({
+        error: '还没有设置生图模型。去「模型设置」里选一个支持生图的模型。'
+      });
+    }
+
+    const size = cleanText(req.body && req.body.size);
+    const refs = referenceImages(Number(req.body && req.body.character_id || 0));
+
+    try {
+      // 有参考图就先试着带参考图生成；这条路不通再退回纯文字生成
+      if (refs.length) {
+        try {
+          const result = await requestImageWithReference(
+            modelRow,
+            prompt,
+            size,
+            refs
+          );
+
+          return res.json({ ok: true, url: result.url, with_reference: true });
+        } catch (e) {
+          // 继续走下面的纯文字分支
+        }
+      }
+
+      const url = await requestImage(modelRow, prompt, size);
+
+      res.json({ ok: true, url, with_reference: false });
+    } catch (error) {
+      res.status(502).json({ error: error.message });
+    }
+  });
+}
+
+module.exports = register;

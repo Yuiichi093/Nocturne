@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nocturne · 角色主页</title>
+  <style>
+    :root {
+      --bg: #f7f7f7;
+      --ink: #111;
+      --muted: #777;
+      --line: rgba(0,0,0,.1);
+      --card: #fff;
+      --safe: env(safe-area-inset-bottom, 0px);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      padding: 18px 18px calc(30px + var(--safe));
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Noto Sans SC", "PingFang SC", sans-serif;
+    }
+
+    .top {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .back, .chat-btn {
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: transparent;
+      color: var(--ink);
+      font-size: 17px;
+    }
+
+    .top h1 {
+      flex: 1;
+      margin: 0;
+      font-size: 22px;
+      font-weight: 500;
+    }
+
+    .profile {
+      padding: 22px 18px;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--card);
+      text-align: center;
+    }
+
+    .avatar {
+      width: 96px;
+      height: 96px;
+      margin: 0 auto 14px;
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: var(--bg);
+      color: var(--muted);
+      font-size: 28px;
+    }
+
+    .avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .profile h2 {
+      margin: 0 0 4px;
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .handle {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .tag {
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 16px 0;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--card);
+    }
+
+    .tabs button {
+      padding: 11px;
+      border: 0;
+      border-radius: 15px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+    }
+
+    .tabs button.active {
+      background: var(--ink);
+      color: var(--bg);
+    }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    .card {
+      padding: 18px;
+      margin-bottom: 14px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--card);
+    }
+
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.8;
+      white-space: pre-wrap;
+    }
+
+    .empty {
+      padding: 34px 18px;
+      border: 1px dashed var(--line);
+      border-radius: 24px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.8;
+      text-align: center;
+    }
+    /* ---- 角色主页里的朋友圈 ---- */
+    .feed-card {
+      margin-bottom: 12px;
+      padding: 16px 16px 12px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--card);
+    }
+
+    .feed-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .feed-avatar {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 38px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 50%;
+      background: #eee;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .feed-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .feed-name {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .feed-time {
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .feed-text {
+      font-size: 14px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .feed-images {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      margin-top: 10px;
+    }
+
+    .feed-images img {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+      border-radius: 10px;
+    }
+
+    .feed-likes {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .feed-comment {
+      margin-top: 6px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .feed-comment b {
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <button class="back" onclick="nocturneBack()" type="button">‹</button>
+    <h1 id="pageTitle">角色主页</h1>
+    <button class="chat-btn" id="chatBtn" type="button">💬</button>
+  </div>
+
+  <div class="profile">
+    <div class="avatar" id="avatar">?</div>
+    <h2 id="name">加载中...</h2>
+    <p class="handle" id="handle"></p>
+    <div class="tags" id="tags"></div>
+  </div>
+
+  <div class="tabs">
+    <button class="active" data-tab="home" type="button">主页</button>
+    <button data-tab="moments" type="button">朋友圈</button>
+  </div>
+
+  <div class="panel active" id="homePanel">
+    <div class="card">
+      <h3>人设摘要</h3>
+      <p id="personaText">暂无</p>
+    </div>
+
+    <div class="card">
+      <h3>性格</h3>
+      <p id="personalityText">暂无</p>
+    </div>
+
+    <div class="card">
+      <h3>背景</h3>
+      <p id="backgroundText">暂无</p>
+    </div>
+
+    <div class="card">
+      <h3>说话方式</h3>
+      <p id="speakingText">暂无</p>
+    </div>
+  </div>
+
+  <div class="panel" id="momentsPanel">
+    <div id="momentsList">
+      <div class="empty">正在加载…</div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const characterId = params.get('id');
+    const $ = (id) => document.getElementById(id);
+
+    if (!characterId) location.href = '/';
+
+    function escapeHtml(text) {
+      return String(text || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    document.querySelectorAll('.tabs button').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.tabs button').forEach((item) => {
+          item.classList.toggle('active', item === button);
+        });
+
+        $('homePanel').classList.toggle('active', button.dataset.tab === 'home');
+        $('momentsPanel').classList.toggle('active', button.dataset.tab === 'moments');
+
+        if (button.dataset.tab === 'moments' && !momentsLoaded) {
+          loadMoments();
+        }
+      });
+    });
+
+    async function load() {
+      const response = await fetch('/api/characters/' + characterId);
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.error || '角色不存在');
+        location.href = '/';
+        return;
+      }
+
+      $('name').textContent = data.name;
+      $('handle').textContent = data.handle || '';
+
+      if (data.avatar) {
+        $('avatar').innerHTML =
+          '<img src="' + escapeHtml(data.avatar) + '" alt="">';
+      } else {
+        $('avatar').textContent = String(data.name || '?').slice(0, 1);
+      }
+
+      $('personaText').textContent = data.persona || '暂无';
+      $('personalityText').textContent = data.personality || '暂无';
+      $('backgroundText').textContent = data.background || '暂无';
+      $('speakingText').textContent = data.speaking_style || '暂无';
+
+      const tags = String(data.tags || '')
+        .split(/[,，\s]+/)
+        .filter(Boolean);
+
+      $('tags').innerHTML = tags
+        .map((tag) => '<span class="tag">' + escapeHtml(tag) + '</span>')
+        .join('');
+
+      $('chatBtn').addEventListener('click', () => {
+        location.href = '/chat.html?character=' + characterId;
+      });
+    }
+
+    // ---- 这个角色的朋友圈 ----
+    let momentsLoaded = false;
+
+    function timeText(value) {
+      if (!value) return '';
+      return String(value).replace('T', ' ').slice(0, 16);
+    }
+
+    function renderFeedCard(row) {
+      const avatar = row.character_avatar
+        ? '<img src="' + escapeHtml(row.character_avatar) + '" alt="">'
+        : escapeHtml(String(row.character_name || '?').slice(0, 1));
+
+      const images = Array.isArray(row.images) ? row.images : [];
+      const likes = Array.isArray(row.likes) ? row.likes : [];
+      const comments = Array.isArray(row.comments) ? row.comments : [];
+
+      const imagesHtml = images.length
+        ? '<div class="feed-images">' + images
+            .map((url) => '<img src="' + escapeHtml(url) + '" alt="">')
+            .join('') + '</div>'
+        : '';
+
+      const likesHtml = likes.length
+        ? '<div class="feed-likes">♥ ' + escapeHtml(likes.join('、')) + '</div>'
+        : '';
+
+      const commentsHtml = comments
+        .map((item) => '<div class="feed-comment"><b>'
+          + escapeHtml(item.author_name || '')
+          + '</b>：' + escapeHtml(item.content || '') + '</div>')
+        .join('');
+
+      return '<article class="feed-card">'
+        + '<div class="feed-head">'
+        + '<div class="feed-avatar">' + avatar + '</div>'
+        + '<div><div class="feed-name">' + escapeHtml(row.character_name || '角色') + '</div>'
+        + '<div class="feed-time">' + escapeHtml(timeText(row.created_at)) + '</div></div>'
+        + '</div>'
+        + '<div class="feed-text">' + escapeHtml(row.content || '') + '</div>'
+        + imagesHtml
+        + likesHtml
+        + commentsHtml
+        + '</article>';
+    }
+
+    async function loadMoments() {
+      const box = $('momentsList');
+      if (!box) return;
+
+      momentsLoaded = true;
+
+      try {
+        const response = await fetch(
+          '/api/moments?character_id=' + encodeURIComponent(characterId)
+        );
+
+        const list = await response.json();
+
+        if (!Array.isArray(list) || !list.length) {
+          box.innerHTML = '<div class="empty">还没有发过朋友圈。</div>';
+          return;
+        }
+
+        box.innerHTML = list.map(renderFeedCard).join('');
+      } catch (error) {
+        box.innerHTML = '<div class="empty">加载失败：'
+          + escapeHtml(error.message) + '</div>';
+      }
+    }
+
+    load();
+  </script>
+  <script src="/back-nav.js"></script>
+</body>
+</html>

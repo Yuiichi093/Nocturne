@@ -1,0 +1,63 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 装 Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+
+      - name: 装 Android SDK 组件
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
+            "ndk;26.1.10909125" "cmake;3.22.1"
+
+      - name: 下载 libnode（Node 18 for Android）
+        run: |
+          curl -L -o /tmp/libnode.zip \
+            https://github.com/nodejs-mobile/nodejs-mobile/releases/download/v18.20.4/nodejs-mobile-v18.20.4-android.zip
+          unzip -q /tmp/libnode.zip -d /tmp/libnode
+          mkdir -p android/app/libnode
+          cp -r /tmp/libnode/bin android/app/libnode/
+          cp -r /tmp/libnode/include android/app/libnode/
+          ls -la android/app/libnode/bin/arm64-v8a
+
+      - name: 装 JS 依赖
+        run: npm install --omit=dev
+
+      - name: 语法检查
+        run: npm run check
+
+      - name: 打包 APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: 收集产物
+        run: |
+          mkdir -p out
+          find android/app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          ls -la out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolephone-apk
+          path: out/*.apk

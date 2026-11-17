@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: 语法检查
+        run: npm run check
+
+      - name: 起服务并冒烟
+        run: |
+          PORT=18787 node server.js &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:18787/api/chats > /dev/null; then
+              echo "服务起来了"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:18787/api/chats > /dev/null
+          curl -sf http://127.0.0.1:18787/index.html > /dev/null
+          kill $SERVER_PID
+          rm -rf data

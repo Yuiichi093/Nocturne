@@ -1,0 +1,38 @@
+{
+  "name": "nocturne",
+  "version": "1.0.0",
+  "description": "跑在自己手机上的 AI 角色聊天应用：角色聊天 / 小剧场 / 朋友圈 / 世界书 / 生图，完全本地运行。",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && for f in *.js; do node --check \"$f\" || exit 1; done && echo \"语法检查通过\"",
+    "check:public": "node --check public/*.js"
+  },
+  "keywords": [
+    "ai",
+    "roleplay",
+    "chat",
+    "character",
+    "local-first",
+    "sqlite",
+    "express",
+    "termux",
+    "self-hosted"
+  ],
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.3.0",
+    "lunar-javascript": "^1.7.8",
+    "multer": "^2.5.0",
+    "sql.js": "^1.16.0"
+  },
+  "license": "MIT",
+  "author": "花雪一",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Yuiichi093/Nocturne.git"
+  }
+}

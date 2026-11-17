@@ -1,0 +1,63 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.huaxueyi.rolephone'
+    compileSdk 34
+    ndkVersion '26.1.10909125'
+
+    defaultConfig {
+        applicationId 'com.huaxueyi.rolephone'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+
+        ndk {
+            // 真机只需要 arm64-v8a；模拟器和老机器保留另外两个
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
+        externalNativeBuild {
+            cmake {
+                // libnode.so 是用 libc++ 编译的，必须用共享 STL
+                arguments '-DANDROID_STL=c++_shared'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    // libnode.so 是按架构放进 jniLibs 的
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libnode/bin']
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+// 把仓库里的 JS 应用搬进 assets，APK 启动后先解出来再跑
+tasks.register('stageNodeProject', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'node', 'prepare-assets.js'
+}
+
+preBuild.dependsOn('stageNodeProject')

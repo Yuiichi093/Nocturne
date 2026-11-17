@@ -1,0 +1,439 @@
+/* ============================================================
+   剧场三页共用样式（剧场首页 / 选身份 / 剧情页）
+   视觉参考 iOS：分组底色 + 白色卡片 + 毛玻璃 + 大标题
+   ============================================================ */
+
+:root {
+  --bg: #f2f2f7;
+  --bg-elevated: #ffffff;
+  --card: #ffffff;
+  --ink: #1c1c1e;
+  --ink-soft: #3a3a3c;
+  --muted: #8e8e93;
+  --line: rgba(60, 60, 67, 0.12);
+  --line-strong: rgba(60, 60, 67, 0.18);
+  --fill: rgba(118, 118, 128, 0.12);
+  --field-bg: #f2f2f7;
+  --fill-strong: rgba(118, 118, 128, 0.2);
+  --accent: #111111;
+  --accent-ink: #ffffff;
+  --danger: #ff3b30;
+  --success: #34c759;
+
+  --r-card: 22px;
+  --r-field: 12px;
+  --r-btn: 14px;
+  --r-sheet: 22px;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 28px rgba(0, 0, 0, 0.05);
+  --shadow-float: 0 8px 20px rgba(0, 0, 0, 0.18), 0 20px 44px rgba(0, 0, 0, 0.14);
+
+  --safe: env(safe-area-inset-bottom, 0px);
+  --top-safe: env(safe-area-inset-top, 0px);
+
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+html[data-theme="dark"] {
+  --bg: #0e0e10;
+  --bg-elevated: #1c1c1e;
+  --card: #1c1c1e;
+  --ink: #f2f2f7;
+  --ink-soft: #d1d1d6;
+  --muted: #8e8e93;
+  --line: rgba(255, 255, 255, 0.12);
+  --line-strong: rgba(255, 255, 255, 0.2);
+  --fill: rgba(120, 120, 128, 0.24);
+  --field-bg: #2c2c2e;
+  --fill-strong: rgba(120, 120, 128, 0.36);
+  --accent: #f2f2f7;
+  --accent-ink: #111111;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100dvh;
+  padding: 0 20px calc(34px + var(--safe));
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  transition: transform 0.16s ease, opacity 0.16s ease, background 0.16s ease;
+}
+
+button:active {
+  transform: scale(0.97);
+}
+
+/* ---------- 顶部大标题 ---------- */
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: calc(16px + var(--top-safe)) 0 4px;
+}
+
+header h1 {
+  flex: 1;
+  margin: 0;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.2;
+}
+
+.back {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0 0 2px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* ---------- 小标题 / 提示 ---------- */
+
+.section-label {
+  margin: 26px 4px 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.tip {
+  margin: 6px 4px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.empty {
+  padding: 44px 20px;
+  border-radius: var(--r-card);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.8;
+  text-align: center;
+}
+
+/* ---------- 卡片 ---------- */
+
+.surface,
+.card {
+  border-radius: var(--r-card);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+}
+
+/* ---------- 按钮 ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 590;
+  letter-spacing: -0.01em;
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn.ghost {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.btn.danger {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 59, 48, 0.32);
+  color: var(--danger);
+}
+
+.btn.small {
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.btn.block {
+  width: 100%;
+}
+
+/* ---------- 表单 ---------- */
+
+.field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.field label {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.field input,
+.field textarea,
+.field select {
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: var(--r-field);
+  background: var(--field-bg);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1.6;
+  outline: none;
+  appearance: none;
+}
+
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--muted);
+}
+
+.field textarea {
+  min-height: 108px;
+  line-height: 1.7;
+  resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus,
+.field select:focus {
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.18);
+}
+
+#status {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ---------- 底部弹层 ---------- */
+
+.modal-backdrop,
+.sheet-backdrop,
+.picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: none;
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.modal-backdrop.open,
+.sheet-backdrop.open,
+.picker-backdrop.open {
+  display: block;
+}
+
+.modal,
+.sheet,
+.picker-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  display: none;
+  max-height: 88dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 20px calc(26px + var(--safe));
+  border-radius: var(--r-sheet) var(--r-sheet) 0 0;
+  background: var(--bg-elevated);
+  box-shadow: 0 -12px 44px rgba(0, 0, 0, 0.2);
+}
+
+.modal-backdrop.open .modal,
+.sheet.open,
+.picker-backdrop.open .picker-sheet {
+  display: block;
+  animation: sheet-in 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(14px);
+    opacity: 0.4;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.sheet-handle {
+  width: 40px;
+  height: 5px;
+  margin: 4px auto 16px;
+  border-radius: 99px;
+  background: var(--fill-strong);
+}
+
+.modal h2,
+.sheet h2,
+.picker-sheet h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.sheet-tip {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.sheet-content {
+  margin-bottom: 16px;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+}
+
+.sheet textarea {
+  width: 100%;
+  min-height: 132px;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: var(--r-field);
+  background: var(--field-bg);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1.7;
+  outline: none;
+  resize: vertical;
+}
+
+.sheet-actions,
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.sheet-btn {
+  flex: 1;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 16px;
+  font-weight: 590;
+}
+
+.sheet-btn.ghost {
+  background: var(--fill);
+  color: var(--ink);
+}
+
+.sheet-btn.danger {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 59, 48, 0.32);
+  color: var(--danger);
+}
+
+/* ---------- 悬浮按钮 ---------- */
+
+.fab {
+  position: fixed;
+  right: 20px;
+  bottom: calc(26px + var(--safe));
+  z-index: 50;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 30px;
+  font-weight: 300;
+  line-height: 1;
+  box-shadow: var(--shadow-float);
+}
+
+/* 弹窗底部按钮（沿用 .modal-actions 结构） */
+.modal-actions button {
+  flex: 1;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--r-btn);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 16px;
+  font-weight: 590;
+}
+
+.modal-actions button.ghost {
+  background: var(--fill);
+  color: var(--ink);
+}
+
+/* select 去掉了原生箭头，补一个浅色的小三角 */
+.field select {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath fill='%238e8e93' d='M6 8 0 0h12z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  padding-right: 42px;
+}

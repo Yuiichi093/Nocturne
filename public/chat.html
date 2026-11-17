@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nocturne · 聊天</title>
+  <link rel="stylesheet" href="/chat.css">
+</head>
+<body>
+  <header class="chat-header">
+    <button class="back-btn" id="backBtn" type="button">‹</button>
+    <div class="header-title" id="headerTitle">
+      <h1 id="chatName">加载中...</h1>
+      <p id="headerSub">未绑定用户人设</p>
+    </div>
+    <button class="more-btn" id="moreBtn" type="button">⋯</button>
+  </header>
+
+  <main class="messages" id="messages"></main>
+
+  <form class="composer" id="composer">
+    <div class="composer-main">
+      <button
+        class="icon-btn"
+        id="plusBtn"
+        type="button"
+        aria-label="更多功能"
+      >＋</button>
+
+      <input id="messageInput" placeholder="输入消息" autocomplete="off">
+
+      <button
+        class="icon-btn"
+        id="stickerBtn"
+        type="button"
+        aria-label="表情包"
+      >☺</button>
+
+      <button type="submit">发送</button>
+    </div>
+
+    <div class="narration-input-wrap" id="narrationWrap">
+      <textarea id="narrationInput" placeholder="旁白 / 动作描写（可空）"></textarea>
+      <div class="narration-hint">发送时会与对白合并成一条消息</div>
+    </div>
+
+    <input id="chatImageInput" type="file" accept="image/*" hidden>
+  </form>
+
+  <div class="sheet-backdrop" id="chatSheetBackdrop"></div>
+
+  <div class="menu-sheet chat-sheet" id="chatPlusSheet">
+    <div class="sheet-handle"></div>
+    <h2>更多</h2>
+    <button class="menu-btn" id="plusNarration" type="button">旁白</button>
+    <button class="menu-btn" id="plusRegenerate" type="button">重新生成</button>
+    <button class="menu-btn" id="plusImage" type="button">图片</button>
+    <button class="menu-btn ghost" data-chat-close type="button">取消</button>
+  </div>
+
+  <div class="menu-sheet chat-sheet" id="chatRegenSheet">
+    <div class="sheet-handle"></div>
+    <h2>重新生成</h2>
+    <p class="chat-sheet-tip" id="chatRegenTip">挑一个满意的，不满意就换一批。</p>
+    <div class="regen-list" id="chatRegenList"></div>
+    <button class="menu-btn" id="chatRegenReroll" type="button">换一批</button>
+    <button class="menu-btn ghost" data-chat-close type="button">取消</button>
+  </div>
+
+  <div class="menu-sheet chat-sheet" id="chatImageSheet">
+    <div class="sheet-handle"></div>
+    <h2>图片</h2>
+    <button class="menu-btn" id="imageFromAlbum" type="button">从相册选一张</button>
+    <div class="field">
+      <label>或者让 AI 画一张（描述画面）</label>
+      <textarea
+        id="chatImagePrompt"
+        placeholder="例如：清晨的厨房，她在煎蛋"
+      ></textarea>
+    </div>
+    <button class="menu-btn" id="imageGenerateBtn" type="button">画一张并发送</button>
+    <button class="menu-btn ghost" data-chat-close type="button">取消</button>
+  </div>
+
+  <div class="menu-sheet chat-sheet" id="chatStickerSheet">
+    <div class="sheet-handle"></div>
+    <h2>表情包</h2>
+    <p class="chat-sheet-tip">点一下直接发出去；「管理」里可以写这个表情是什么意思。</p>
+    <div class="sticker-grid" id="chatStickerGrid"></div>
+    <div class="chat-sheet-actions">
+      <button class="menu-btn ghost" id="stickerAddBtn" type="button">添加</button>
+      <button class="menu-btn ghost" id="stickerManageBtn" type="button">管理</button>
+      <button class="menu-btn ghost" data-chat-close type="button">关闭</button>
+    </div>
+    <input id="stickerFileInput" type="file" accept="image/*" hidden>
+  </div>
+
+  <div class="sheet-backdrop" id="menuBackdrop"></div>
+
+  <div class="menu-sheet" id="menuSheet">
+    <div class="sheet-handle"></div>
+    <h2>聊天设置</h2>
+
+    <button class="menu-btn" id="pinToggle" type="button">置顶角色</button>
+
+    <div class="field">
+      <label>绑定用户人设</label>
+      <select id="personaSelect"></select>
+    </div>
+
+    <div class="row">
+      <span>显示 token / 命中</span>
+      <input id="showMetaToggle" type="checkbox">
+    </div>
+
+    <div class="field">
+      <label>我的气泡颜色</label>
+      <div class="color-row">
+        <input id="userColorPicker" type="color" value="#E6E0EF">
+        <input id="userColorText" type="text" maxlength="7" value="#E6E0EF">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>角色气泡颜色</label>
+      <div class="color-row">
+        <input id="charColorPicker" type="color" value="#ffffff">
+        <input id="charColorText" type="text" maxlength="7" value="#ffffff">
+      </div>
+    </div>
+
+    <button class="menu-btn ghost" id="closeMenu" type="button">关闭</button>
+  </div>
+
+  <div class="edit-modal" id="editModal">
+    <div class="edit-box">
+      <h2>编辑消息</h2>
+      <textarea id="editNarration" placeholder="旁白 / 动作描写（可空）"></textarea>
+      <textarea id="editText" placeholder="对白"></textarea>
+      <div class="edit-actions">
+        <button class="ghost" id="editCancel" type="button">取消</button>
+        <button class="ghost danger" id="editDelete" type="button">删除</button>
+        <button class="ghost" id="editRewrite" type="button">重写</button>
+        <button id="editSave" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/chat.js"></script>
+  <script src="/chat-panel.js"></script>
+  <script src="/chat-actions.js"></script>
+  <script src="/back-nav.js"></script>
+</body>
+</html>

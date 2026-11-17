@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nocturne · 剧情</title>
+  <link rel="stylesheet" href="/theater-ui.css">
+  <link rel="stylesheet" href="/theater-play.css">
+  <script>
+    // 跟首页共用同一个夜间模式开关
+    try {
+      if (localStorage.getItem('saudade-theme') === 'dark') {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="play-header">
+    <button class="icon-btn" id="backBtn" type="button">‹</button>
+    <div class="header-title">
+      <h1 id="scriptTitle">加载中...</h1>
+      <p id="scriptSubtitle"></p>
+    </div>
+    <button class="icon-btn" id="moreBtn" type="button">⋯</button>
+  </header>
+
+  <div class="continue-bar">
+    <button id="continueBtn" type="button">自然续写</button>
+    <button
+      class="compose-icon"
+      id="drawBtn"
+      type="button"
+      aria-label="给这一幕画一张"
+      title="给这一幕画一张"
+    >▧</button>
+  </div>
+
+  <main class="story" id="story"></main>
+
+  <button class="dice-fab" id="diceFab" type="button">🎲</button>
+
+  <nav class="bottom-nav">
+    <button data-panel="chapters" type="button">章节</button>
+    <button data-panel="correct" type="button">修正</button>
+    <button data-panel="info" type="button">信息</button>
+    <button data-panel="forum" type="button">论坛</button>
+  </nav>
+
+  <div class="sheet-backdrop" id="sheetBackdrop"></div>
+
+  <section class="sheet" id="chaptersSheet">
+    <div class="sheet-handle"></div>
+    <h2>章节</h2>
+    <div id="chaptersContent" class="sheet-content">当前为初始副本。</div>
+    <button class="sheet-btn ghost" data-close type="button">关闭</button>
+  </section>
+
+  <section class="sheet" id="correctSheet">
+    <div class="sheet-handle"></div>
+    <h2>修正剧情</h2>
+    <p class="sheet-tip">输入需要持续遵守的剧情修正规则，保存后将重写当前剧情。</p>
+    <textarea id="correctionText" placeholder="例如：旁白不要替用户做决定，不要替用户说话。"></textarea>
+    <div class="sheet-actions">
+      <button class="sheet-btn ghost" data-close type="button">取消</button>
+      <button class="sheet-btn" id="saveRewrite" type="button">保存并重写</button>
+    </div>
+  </section>
+
+  <section class="sheet" id="infoSheet">
+    <div class="sheet-handle"></div>
+    <h2>信息</h2>
+    <div id="infoContent" class="sheet-content"></div>
+    <button class="sheet-btn ghost" data-close type="button">关闭</button>
+  </section>
+
+  <section class="sheet" id="forumSheet">
+    <div class="sheet-handle"></div>
+    <h2>论坛</h2>
+    <div class="sheet-content">论坛后续接入。</div>
+    <button class="sheet-btn ghost" data-close type="button">关闭</button>
+  </section>
+
+  <section class="sheet" id="actionSheet">
+    <div class="sheet-handle"></div>
+    <h2>自定义行动</h2>
+    <textarea id="actionText" placeholder="描述你想采取的行动..."></textarea>
+    <div class="sheet-actions">
+      <button class="sheet-btn ghost" data-close type="button">收起</button>
+      <button class="sheet-btn" id="sendAction" type="button">发送</button>
+    </div>
+  </section>
+
+  <section class="sheet" id="diceSheet">
+    <div class="sheet-handle"></div>
+    <h2>跑团投掷</h2>
+
+    <div class="field">
+      <label>骰子</label>
+      <select id="diceFormula">
+        <option value="1d4">1d4</option>
+        <option value="1d6">1d6</option>
+        <option value="1d8">1d8</option>
+        <option value="1d10">1d10</option>
+        <option value="1d12">1d12</option>
+        <option value="1d20" selected>1d20</option>
+        <option value="1d100">1d100</option>
+        <option value="2d6">2d6</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>修正值</label>
+      <input id="diceModifier" type="number" value="0">
+    </div>
+
+    <div class="dice-result" id="diceResult">还没有投掷。</div>
+
+    <div class="sheet-actions">
+      <button class="sheet-btn ghost" data-close type="button">关闭</button>
+      <button class="sheet-btn" id="rollDice" type="button">投掷</button>
+    </div>
+  </section>
+
+  <section class="sheet" id="directionSheet">
+    <div class="sheet-handle"></div>
+    <h2>剧情走向</h2>
+    <p class="sheet-tip">写下你希望接下来往哪走，下次生成时会参考。留空表示不限制。</p>
+    <textarea id="directionText" placeholder="例如：让砂金主动摊牌，气氛紧张一点。"></textarea>
+    <div class="sheet-actions">
+      <button class="sheet-btn ghost" data-close type="button">取消</button>
+      <button class="sheet-btn" id="saveDirection" type="button">保存</button>
+    </div>
+  </section>
+
+  <section class="sheet" id="moreSheet">
+    <div class="sheet-handle"></div>
+    <h2>更多</h2>
+    <button class="sheet-btn" id="openAction" type="button">自定义行动</button>
+    <button class="sheet-btn" id="directionBtn" type="button">剧情走向</button>
+    <button class="sheet-btn" id="drawFromMoreBtn" type="button">给这一幕画一张</button>
+    <button class="sheet-btn" id="branchSessionBtn" type="button">从当前进度创建分支</button>
+    <button class="sheet-btn danger" id="deleteSessionBtn" type="button">删除当前剧情</button>
+    <button class="sheet-btn ghost" id="backTheater" type="button">返回剧场列表</button>
+    <button class="sheet-btn ghost" data-close type="button">关闭</button>
+  </section>
+
+  <section class="sheet" id="drawSheet">
+    <div class="sheet-handle"></div>
+    <h2>给这一幕画一张</h2>
+    <p class="sheet-tip">画面描述留空，就让 AI 按最近几段剧情自己写；填了就用你写的。</p>
+    <textarea id="drawPrompt" placeholder="例如：雨夜的旧车站，她收着伞回头，霓虹映在积水里。"></textarea>
+    <div class="field">
+      <label>尺寸</label>
+      <select id="drawSize">
+        <option value="1024x1024" selected>方形 1024 × 1024</option>
+        <option value="832x1216">竖图 832 × 1216</option>
+        <option value="1216x832">横图 1216 × 832</option>
+      </select>
+    </div>
+    <div class="draw-status" id="drawStatus"></div>
+    <div class="sheet-actions">
+      <button class="sheet-btn ghost" data-close type="button">取消</button>
+      <button class="sheet-btn" id="drawGenerate" type="button">生成插画</button>
+    </div>
+  </section>
+
+  <div class="image-viewer" id="imageViewer" aria-hidden="true">
+    <img id="imageViewerImg" alt="">
+  </div>
+
+  <script src="/theater-play.js"></script>
+  <script src="/back-nav.js"></script>
+</body>
+</html>
