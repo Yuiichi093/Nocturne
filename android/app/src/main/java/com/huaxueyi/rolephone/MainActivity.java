@@ -2,10 +2,14 @@ package com.huaxueyi.rolephone;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.ViewGroup;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -13,6 +17,8 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -25,6 +31,11 @@ import java.io.OutputStream;
  * 1. 把 assets/nodejs-project 解到 filesDir（assets 不是真文件，node 读不了）
  * 2. 起一个后台线程跑 node，入口是文件目录里的 main.js
  * 3. WebView 加载 127.0.0.1:8787，服务还没起来就退避重试
+ *
+ * 曾经出现过「整片白屏、什么都不显示」：WebView 的渲染进程被系统回收后，
+ * loadUrl 悄无声息地什么都不做，onReceivedError 也不触发，看上去就是白的。
+ * 现在加了几道保险：启动期显示占位文字；页面加载完是空的就重载一次；
+ * 渲染进程挂了就整个重建；回到前台发现还是空白的也重新加载。
  */
 public class MainActivity extends Activity {
 
@@ -40,9 +51,14 @@ public class MainActivity extends Activity {
 
     private static boolean nodeStarted = false;
 
+    private FrameLayout rootLayout;
+    private TextView splashView;
     private WebView webView;
+
     private int retryCount = 0;
     private boolean logShown = false;
+    private boolean blankReloaded = false;
+    private boolean pageReady = false;
     private ValueCallback<Uri[]> fileCallback;
 
     public native Integer startNodeWithArguments(String[] arguments);
@@ -64,8 +80,25 @@ public class MainActivity extends Activity {
             startNode(mainJs);
         }
 
+        rootLayout = new FrameLayout(this);
+
+        splashView = new TextView(this);
+        splashView.setText("Nocturne 正在启动…");
+        splashView.setGravity(Gravity.CENTER);
+        splashView.setTextSize(15);
+        splashView.setTextColor(Color.parseColor("#8E8E93"));
+        splashView.setBackgroundColor(Color.parseColor("#F7F7F7"));
+        rootLayout.addView(splashView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        setContentView(rootLayout);
+
+        installWebView();
+    }
+
+    /** 建一个 WebView 并加载首页；渲染进程挂掉后也用它重建 */
+    private void installWebView() {
         webView = new WebView(this);
-        setContentView(webView);
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -79,17 +112,63 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                // 服务还没起来：等一会儿再试，最多试 60 次（约 30 秒）
+                // 服务还没起来：等一会儿再试，最多试 120 次（约 60 秒）
                 if (!request.isForMainFrame()) {
                     return;
                 }
-                if (retryCount < 60) {
-                    view.postDelayed(() -> webView.loadUrl(HOME_URL), 500);
+                if (retryCount < 120) {
+                    view.postDelayed(() -> loadHome(), 500);
                     retryCount++;
                 } else if (!logShown) {
                     logShown = true;
                     showBootLog();
                 }
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                // 加载完成但页面是空的（WebView 抽风、或者前端脚本整体没跑起来）：
+                // 先重载一次，还是空就把日志摊出来，至少让人能截图
+                view.evaluateJavascript(
+                        "(document.body && document.body.innerText.trim().length) || 0",
+                        value -> {
+                            int length = 0;
+                            if (value != null) {
+                                String digits = value.replaceAll("[^0-9]", "");
+                                try {
+                                    length = digits.isEmpty() ? 0 : Integer.parseInt(digits);
+                                } catch (NumberFormatException ignored) {
+                                    length = 0;
+                                }
+                            }
+                            if (length > 0) {
+                                pageReady = true;
+                                retryCount = 0;
+                                hideSplash();
+                                return;
+                            }
+                            if (!blankReloaded) {
+                                blankReloaded = true;
+                                view.postDelayed(() -> loadHome(), 800);
+                            } else if (!logShown) {
+                                logShown = true;
+                                showBootLog();
+                            }
+                        });
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                // 系统把 WebView 的渲染进程回收了：这个 WebView 已经废了，
+                // 必须销毁重建，否则永远白屏（而且不会触发任何回调）
+                Log.e(TAG, "WebView 渲染进程挂了，重建");
+                appendLog("[shell] WebView 渲染进程被回收，重建");
+                rootLayout.removeView(view);
+                view.destroy();
+                pageReady = false;
+                blankReloaded = false;
+                installWebView();
+                return true;
             }
         });
 
@@ -114,7 +193,42 @@ public class MainActivity extends Activity {
             }
         });
 
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        rootLayout.addView(webView, 0, params);
+
+        loadHome();
+    }
+
+    private void loadHome() {
+        if (webView == null) {
+            return;
+        }
         webView.loadUrl(HOME_URL);
+    }
+
+    private void hideSplash() {
+        if (splashView != null && splashView.getVisibility() == TextView.VISIBLE) {
+            splashView.setVisibility(TextView.GONE);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从后台回来还是白的（进程被系统杀过、渲染进程没了）：重新加载一次
+        if (webView == null) {
+            if (rootLayout != null) {
+                installWebView();
+            }
+            return;
+        }
+        if (!pageReady) {
+            String current = webView.getUrl();
+            if (current == null || current.startsWith("about:") || current.isEmpty()) {
+                loadHome();
+            }
+        }
     }
 
     private void startNode(final String mainJs) {
@@ -129,7 +243,7 @@ public class MainActivity extends Activity {
             appendLog("node 退出，code=" + code);
             Log.i(TAG, "node 退出，code=" + code);
             runOnUiThread(() -> {
-                if (retryCount >= 60 && !logShown) {
+                if (!pageReady && !logShown) {
                     logShown = true;
                     showBootLog();
                 }
@@ -165,12 +279,14 @@ public class MainActivity extends Activity {
                 .replace(">", "&gt;");
         String html = "<!doctype html><meta name=viewport content=\"width=device-width,initial-scale=1\">"
                 + "<body style=\"margin:0;padding:16px;font:13px/1.5 monospace;background:#F2F2F7;color:#1c1c1e\">"
-                + "<h3 style=\"font:600 17px sans-serif;margin:0 0 4px\">服务没有起来</h3>"
+                + "<h3 style=\"font:600 17px sans-serif;margin:0 0 4px\">页面没有正常显示</h3>"
                 + "<p style=\"font:13px sans-serif;color:#8e8e93;margin:0 0 12px\">"
                 + "把这个页面截图发给开发者就够了。</p>"
                 + "<pre style=\"white-space:pre-wrap;word-break:break-all;margin:0\">"
                 + escaped + "</pre></body>";
-        webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+        if (webView != null) {
+            webView.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
+        }
     }
 
     @Override
