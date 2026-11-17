@@ -243,25 +243,52 @@ module.exports = function (app, db) {
     res.json(rows);
   });
 
-  app.get('/api/moments/settings', (req, res) => {
-    const worldId = getActiveWorldId();
-    const key = 'moments_cover_' + worldId;
+  // 朋友圈封面：全局一份，不再按世界分开。
+  // 以前按世界存，切了世界（或者新建一个世界后）回首页就发现「刚换的背景没了」，
+  // 所以现在优先读全局 key，读不到再回退到老的世界 key，老图不会丢。
+  function readCover(worldId) {
     const row = db.prepare('SELECT value FROM app_settings WHERE key = ?')
-      .get(key);
+      .get('moments_cover');
 
-    res.json({ cover: row ? row.value : '' });
-  });
+    if (row && row.value) return row.value;
 
-  app.post('/api/moments/cover', (req, res) => {
-    const worldId = getActiveWorldId();
-    const key = 'moments_cover_' + worldId;
-    const cover = cleanText(req.body && req.body.cover);
+    if (worldId) {
+      const legacy = db.prepare('SELECT value FROM app_settings WHERE key = ?')
+        .get('moments_cover_' + worldId);
+      if (legacy && legacy.value) return legacy.value;
+    }
 
+    return '';
+  }
+
+  function saveSetting(key, value) {
     db.prepare(`
       INSERT INTO app_settings (key, value)
       VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(key, cover);
+    `).run(key, value);
+  }
+
+  app.get('/api/moments/settings', (req, res) => {
+    let worldId = '';
+    try {
+      worldId = getActiveWorldId();
+    } catch (e) {
+      // 还没有世界观时不该让整个朋友圈设置接口 500，封面按空的返回就行
+      worldId = '';
+    }
+
+    try {
+      res.json({ cover: readCover(worldId) });
+    } catch (e) {
+      res.json({ cover: '' });
+    }
+  });
+
+  app.post('/api/moments/cover', (req, res) => {
+    const cover = cleanText(req.body && req.body.cover);
+
+    saveSetting('moments_cover', cover);
 
     res.json({ ok: true, cover });
   });

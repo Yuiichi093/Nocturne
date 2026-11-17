@@ -1,6 +1,6 @@
 {
   "name": "nocturne",
-  "version": "1.2.8",
+  "version": "1.2.9",
   "description": "跑在自己手机上的 AI 角色聊天应用：角色聊天 / 小剧场 / 朋友圈 / 世界书 / 生图，完全本地运行。",
   "main": "server.js",
   "scripts": {
