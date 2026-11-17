@@ -27,7 +27,7 @@
     "sql.js": "^1.16.0"
   },
   "license": "MIT",
-  "author": "花雪一 <huaxueyi@users.noreply.github.com>（想法与设计）· 阿灯（AI 结对编程）",
+  "author": "Yuiichi <Yuiichi093@users.noreply.github.com>（想法与设计）· 阿灯 / Aiden（结对编程）",
   "engines": {
     "node": ">=18.0.0"
   },
