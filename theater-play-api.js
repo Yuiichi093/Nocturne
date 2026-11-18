@@ -185,6 +185,26 @@ module.exports = function (app, db) {
     `).all(sessionId, Number(limit) || 10).reverse();
   }
 
+  // 兜底：模型怎么都写不出描述时，直接拿最近几段剧情的文字拼一段当描述。
+  // 剧情本身就是画面描写，够模型画一张了，总比直接报错让她画不成强。
+  function fallbackImagePrompt(session) {
+    const rows = recentSceneRows(session.id, 8);
+
+    const parts = rows.map((row) => {
+      if (row.role === 'dice') return '';
+      if (row.role === 'narrator') return '';
+      return String(row.content || '')
+        .replace(/\s+/g, ' ')
+        .replace(/[「」“”"]/g, '')
+        .trim();
+    }).filter((line) => line.length >= 8);
+
+    if (!parts.length) return '';
+
+    const text = parts.slice(-3).join('；');
+    return text.slice(0, 300);
+  }
+
   // 让文本模型根据最近剧情写一句画面描述（不是台词，是画面）
   async function writeImagePrompt(session, script, history) {
     const rows = Array.isArray(history) && history.length
@@ -823,9 +843,18 @@ module.exports = function (app, db) {
         prompt = await writeImagePrompt(session, script);
         autoPrompted = true;
       } catch (error) {
-        return res.status(502).json({
-          error: '自动写画面描述失败：' + error.message
-        });
+        console.error('[剧场生图] 自动写描述失败，改用剧情原文兜底：' + (error && error.message));
+
+        const fallback = fallbackImagePrompt(session);
+
+        if (!fallback) {
+          return res.status(error.status || 502).json({
+            error: '自动写画面描述失败：' + error.message + '；你也可以自己写一句描述再生成'
+          });
+        }
+
+        prompt = fallback;
+        autoPrompted = true;
       }
     }
 

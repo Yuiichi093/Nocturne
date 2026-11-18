@@ -112,6 +112,15 @@ function emptyContentError(choice, message, text) {
   return new Error('模型返回了空内容');
 }
 
+// 出错时把模型名也带出来，报错截图一看就知道是哪个模型不听话
+function withModelHint(error, modelRow) {
+  const name = modelRow && (modelRow.name || modelRow.model || modelRow.model_name);
+  if (!name || !error) return error;
+  const hinted = new Error(String(error.message) + '（模型：' + name + '）');
+  hinted.status = error.status;
+  return hinted;
+}
+
 /**
  * 统一发一次 chat/completions，返回 { data, text, content, started }。
  *
@@ -202,10 +211,10 @@ async function requestChat(modelRow, payload, options) {
       continue;
     }
 
-    throw lastError;
+    throw withModelHint(lastError, modelRow);
   }
 
-  throw lastError || new Error('模型返回了空内容');
+  throw withModelHint(lastError || new Error('模型返回了空内容'), modelRow);
 }
 
 async function callModel(options) {
