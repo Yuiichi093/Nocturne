@@ -6,7 +6,7 @@
 //     所以只缓存「200、没被重定向、不是登录页」的导航响应。
 //  2) 离线兜底必须一定返回一个 Response。之前 caches.match 找不到就是 undefined，
 //     respondWith(undefined) 会抛 TypeError，WebView 直接一片白。
-const VERSION = 'nocturne-v4';
+const VERSION = 'nocturne-v5';
 const OFFLINE_URL = '/offline.html';
 const SHELL = [
   '/manifest.json',
@@ -79,11 +79,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetchWithRetry(request)
         .then((response) => {
-          const isLogin = url.pathname === '/login.html';
-          if (!isLogin && cacheable(response)) {
-            const copy = response.clone();
-            caches.open(VERSION).then((cache) => cache.put(request, copy)).catch(() => {});
-          }
+          // 页面不做缓存：装上新 APK 后必须看到新页面，不然用户会以为更新没生效
           return response;
         })
         .catch(() => caches.match(request).then((hit) => hit || offlineResponse()))
