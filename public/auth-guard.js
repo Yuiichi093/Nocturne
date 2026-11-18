@@ -41,14 +41,46 @@
 
   var originalFetch = window.fetch.bind(window);
 
-  window.fetch = function (input, init) {
-    var responsePromise = originalFetch(input, init);
+  // 冷启动时 App 里的 node 服务还没监听上端口，而 Service Worker 会先拿缓存里的
+  // 页面把界面画出来，这时候页面里的接口请求就是 "Failed to fetch"。
+  // 所以同源的 GET 遇到网络层失败时先退避重试几次，别一上来就给用户看红字。
+  // POST/PUT/DELETE 不重试——重复提交会把消息、动态发两遍。
+  var RETRY_DELAYS = [400, 800, 1200, 1600];
 
-    if (!sameOriginAndNotAuthApi(input) || isLoginPage()) {
-      return responsePromise;
+  function methodOf(init) {
+    var method = (init && init.method) || 'GET';
+    return String(method).toUpperCase();
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function withRetry(input, init) {
+    var method = methodOf(init);
+    var canRetry = method === 'GET' || method === 'HEAD';
+    var attempt = 0;
+
+    function run() {
+      return originalFetch(input, init).catch(function (error) {
+        // 只有网络层错误（连不上）才重试；HTTP 4xx/5xx 是正常响应，不在这里
+        var retriable = canRetry && attempt < RETRY_DELAYS.length;
+        if (!retriable) throw error;
+        var delay = RETRY_DELAYS[attempt];
+        attempt += 1;
+        return sleep(delay).then(run);
+      });
     }
 
-    return responsePromise.then(function (response) {
+    return run();
+  }
+
+  window.fetch = function (input, init) {
+    if (!sameOriginAndNotAuthApi(input) || isLoginPage()) {
+      return originalFetch(input, init);
+    }
+
+    return withRetry(input, init).then(function (response) {
       if (response && response.status === 401) goLogin();
       return response;
     });

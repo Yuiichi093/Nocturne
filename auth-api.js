@@ -175,6 +175,37 @@ module.exports = function registerAuth(app) {
     });
   });
 
+  /**
+   * 本机重置密码：忘了密码时用。
+   * 这个 App 的数据只在这台设备上，没有邮箱/短信可验证，所以验证方式就是
+   * 「人在这台手机前」——必须手输固定确认短语，改完会踢掉所有登录状态。
+   */
+  app.post('/api/auth/reset-password', (req, res) => {
+    const body = req.body || {};
+    const confirm = String(body.confirm || '').replace(/\s+/g, '');
+
+    if (confirm !== '我要重置密码') {
+      return res.status(400).json({
+        error: '确认短语不对，请原样输入：我要重置密码'
+      });
+    }
+
+    const row = authDb.findByName(body.username);
+
+    if (!row) {
+      return res.status(404).json({ error: '没有这个账号，检查一下用户名' });
+    }
+
+    try {
+      authDb.changePassword(row.id, body.new_password);
+      authDb.dropSessionsOf(row.id, '');
+      console.log('[账号] 已重置密码：' + row.username);
+      res.json({ ok: true, user: authDb.publicUser(row) });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   app.post('/api/auth/password', (req, res) => {
     if (!req.user) {
       return res.status(401).json({ error: '未登录' });

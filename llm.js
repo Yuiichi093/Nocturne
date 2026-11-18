@@ -121,6 +121,61 @@ function withModelHint(error, modelRow) {
   return hinted;
 }
 
+// 把上游的原始报错（常常是一大坨 JSON）翻成人话。
+// 最常见的 401 就是 Key 填错/过期，用户看到「Authentication Fails」根本不知道怎么办。
+function upstreamErrorText(statusCode, raw) {
+  let detail = "";
+  let type = "";
+
+  try {
+    const parsed = JSON.parse(raw);
+    const inner = parsed && parsed.error && typeof parsed.error === "object" ? parsed.error : parsed;
+    detail = String(
+      (inner && (inner.message || inner.msg || inner.error)) || ""
+    ).trim();
+    type = String((inner && inner.type) || "").trim();
+  } catch (e) {
+    detail = String(raw || "").trim();
+  }
+
+  detail = detail.replace(/\s+/g, " ").slice(0, 180);
+
+  if (statusCode === 401 || statusCode === 403 || /authentication|invalid.*key|unauthor/i.test(detail)) {
+    return (
+      "API Key 不对或者已经过期了：请去「模型设置」里把这个模型的 Key 重新填一次" +
+      (detail ? "（接口说：" + detail + "）" : "")
+    );
+  }
+
+  if (statusCode === 429) {
+    return "模型服务被限流了，等一分钟再试" + (detail ? "（接口说：" + detail + "）" : "");
+  }
+
+  if (statusCode === 404) {
+    return (
+      "接口地址或者模型名不对（404）：检查「模型设置」里的 Base URL 和模型名" +
+      (detail ? "（接口说：" + detail + "）" : "")
+    );
+  }
+
+  if (statusCode === 400) {
+    return (
+      "模型服务说这个请求不对（400）" +
+      (detail ? "：" + detail : "") +
+      "，常见原因是模型名不认识、参数不被支持，或者这个模型不支持图片"
+    );
+  }
+
+  if (statusCode >= 500) {
+    return (
+      "模型服务那边出错了（" + statusCode + "），不是手机上 App 的问题，过一会儿再试" +
+      (detail ? "（接口说：" + detail + "）" : "")
+    );
+  }
+
+  return "模型接口返回错误（" + statusCode + "）" + (detail ? "：" + detail : "");
+}
+
 /**
  * 统一发一次 chat/completions，返回 { data, text, content, started }。
  *
@@ -155,9 +210,10 @@ async function requestChat(modelRow, payload, options) {
       text = await response.text();
 
       if (!response.ok) {
-        const error = new Error('模型接口返回错误：' + text.slice(0, 500));
+        const error = new Error(upstreamErrorText(response.status, text));
         error.status = 502;
         error.raw = text;
+        error.upstreamStatus = response.status;
         throw error;
       }
     } catch (error) {

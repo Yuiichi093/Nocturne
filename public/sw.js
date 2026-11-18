@@ -6,7 +6,7 @@
 //     所以只缓存「200、没被重定向、不是登录页」的导航响应。
 //  2) 离线兜底必须一定返回一个 Response。之前 caches.match 找不到就是 undefined，
 //     respondWith(undefined) 会抛 TypeError，WebView 直接一片白。
-const VERSION = 'nocturne-v3';
+const VERSION = 'nocturne-v4';
 const OFFLINE_URL = '/offline.html';
 const SHELL = [
   '/manifest.json',
@@ -41,6 +41,21 @@ function offlineResponse() {
   ));
 }
 
+// 冷启动时 node 服务还没监听上，直接回退缓存会画出一个「能看见、但接口全挂」的页面。
+// 先给网络几次机会（约 3 秒），实在连不上再退回缓存/离线页。
+const NAV_RETRY_DELAYS = [400, 800, 1600];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fetchWithRetry(request, attempt = 0) {
+  return fetch(request).catch((error) => {
+    if (attempt >= NAV_RETRY_DELAYS.length) throw error;
+    return sleep(NAV_RETRY_DELAYS[attempt]).then(() => fetchWithRetry(request, attempt + 1));
+  });
+}
+
 function cacheable(response) {
   return response && response.ok && !response.redirected && response.type === 'basic';
 }
@@ -62,7 +77,7 @@ self.addEventListener('fetch', (event) => {
   // 页面：先网络，失败回退离线页
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
+      fetchWithRetry(request)
         .then((response) => {
           const isLogin = url.pathname === '/login.html';
           if (!isLogin && cacheable(response)) {

@@ -186,6 +186,44 @@
       cursor: default;
     }
 
+    .forgot {
+      display: inline-block;
+      margin: -4px 0 12px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .forgot[hidden] { display: none; }
+
+    .reset-panel {
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: transparent;
+    }
+
+    .reset-panel[hidden] { display: none; }
+
+    .reset-title {
+      margin: 0 0 4px;
+      font-size: 14px;
+    }
+
+    .reset-note {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.7;
+    }
+
+    .reset-panel .primary-btn { margin-top: 2px; }
+
     .foot {
       margin: 16px 0 0;
       color: var(--muted);
@@ -234,6 +272,8 @@
           >
         </div>
 
+        <button class="forgot" id="forgotBtn" type="button">忘记密码？</button>
+
         <div class="field" id="nicknameField" hidden>
           <label for="nickname">昵称（可选）</label>
           <input
@@ -252,6 +292,40 @@
 
         <button class="primary-btn" id="submitBtn" type="submit">登录</button>
       </form>
+
+      <div class="reset-panel" id="resetPanel" hidden>
+        <p class="reset-title">本机重置密码</p>
+        <p class="reset-note">
+          数据只存在这台手机上，没有邮箱可以验证，所以这里用「人在手机前」来确认：
+          原样输入下面那句确认短语就行。改完密码后，其它地方的登录会失效，聊天记录、
+          角色、图片都不会动。
+        </p>
+
+        <div class="field">
+          <label for="resetUser">用户名</label>
+          <input id="resetUser" maxlength="32" autocapitalize="off" autocorrect="off" placeholder="用户名">
+        </div>
+
+        <div class="field">
+          <label for="resetConfirm">确认短语</label>
+          <input id="resetConfirm" maxlength="20" placeholder="我要重置密码">
+        </div>
+
+        <div class="field">
+          <label for="resetPassword1">新密码</label>
+          <input id="resetPassword1" type="password" maxlength="128" placeholder="至少 6 位">
+        </div>
+
+        <div class="field">
+          <label for="resetPassword2">再输一次新密码</label>
+          <input id="resetPassword2" type="password" maxlength="128" placeholder="再输一次">
+        </div>
+
+        <p class="error" id="resetError" role="alert" hidden></p>
+        <p class="hint" id="resetOk" hidden></p>
+
+        <button class="primary-btn" id="resetBtn" type="button">重置密码</button>
+      </div>
     </div>
 
     <p class="foot">单机多账号 · 数据只存在这台设备上</p>
@@ -296,6 +370,8 @@
       submitBtn.textContent = isRegister ? '注册并登录' : '登录';
 
       passwordInput.autocomplete = isRegister ? 'new-password' : 'current-password';
+      $('forgotBtn').hidden = isRegister;
+      if (isRegister) closeReset();
       showError('');
     }
 
@@ -402,6 +478,92 @@
 
     $('tabLogin').addEventListener('click', () => setMode('login'));
     $('tabRegister').addEventListener('click', () => setMode('register'));
+
+    // ---- 忘记密码：本机重置 ----
+    const resetPanel = $('resetPanel');
+    const resetError = $('resetError');
+    const resetOk = $('resetOk');
+    let resetting = false;
+
+    function showResetError(message) {
+      resetError.textContent = message || '';
+      resetError.hidden = !message;
+      if (message) resetOk.hidden = true;
+    }
+
+    function closeReset() {
+      resetPanel.hidden = true;
+      resetError.hidden = true;
+      resetOk.hidden = true;
+    }
+
+    $('forgotBtn').addEventListener('click', () => {
+      const open = resetPanel.hidden;
+      if (!open) {
+        closeReset();
+        return;
+      }
+      resetPanel.hidden = false;
+      resetError.hidden = true;
+      resetOk.hidden = true;
+      if (!$('resetUser').value) {
+        $('resetUser').value = usernameInput.value.trim();
+      }
+      $('resetConfirm').focus();
+    });
+
+    $('resetBtn').addEventListener('click', async () => {
+      if (resetting) return;
+
+      const username = $('resetUser').value.trim();
+      const confirm = $('resetConfirm').value.trim();
+      const pass1 = $('resetPassword1').value;
+      const pass2 = $('resetPassword2').value;
+
+      if (!username) return showResetError('请填写用户名');
+      if (confirm.replace(/\s+/g, '') !== '我要重置密码') {
+        return showResetError('确认短语要原样输入：我要重置密码');
+      }
+      if (pass1.length < 6) return showResetError('新密码至少 6 位');
+      if (pass1 !== pass2) return showResetError('两次输入的新密码不一样');
+
+      resetting = true;
+      $('resetBtn').disabled = true;
+      const label = $('resetBtn').textContent;
+      $('resetBtn').textContent = '处理中…';
+
+      try {
+        const res = await fetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ username, confirm, new_password: pass1 })
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          showResetError((data && data.error) || '重置失败，稍后再试');
+          return;
+        }
+
+        resetOk.textContent = '改好了，用新密码登录吧。';
+        resetOk.hidden = false;
+        resetError.hidden = true;
+        usernameInput.value = username;
+        passwordInput.value = '';
+        $('resetConfirm').value = '';
+        $('resetPassword1').value = '';
+        $('resetPassword2').value = '';
+        passwordInput.focus();
+        setTimeout(() => { closeReset(); }, 2500);
+      } catch (e) {
+        showResetError('连不上服务，稍后再试一下');
+      } finally {
+        resetting = false;
+        $('resetBtn').disabled = false;
+        $('resetBtn').textContent = label;
+      }
+    });
 
     // 一个账号都还没有时，直接停在注册页
     (async () => {
