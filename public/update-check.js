@@ -10,7 +10,60 @@
     return;
   }
 
+  const noteMore = document.getElementById('updateNoteMore');
   let apkUrl = '';
+  let fullNotes = '';
+  let briefNotes = '';
+
+  // GitHub 的 release 正文就是 CHANGELOG，一版一版堆得很长。
+  // 这里只提炼「最新一版」的几行，剩下的折起来，别把设置页撑成一片灰字。
+  function tidyLine(line) {
+    return String(line)
+      .replace(/^\s*#{1,6}\s*/, '')
+      .replace(/^-\s+/, '· ')
+      .replace(/\*\*/g, '')
+      .trim();
+  }
+
+  function pickLatest(raw) {
+    const text = String(raw || '').replace(/\r/g, '').trim();
+    if (!text) return { brief: '', full: '' };
+
+    const lines = text.split('\n');
+    const firstHeading = lines.findIndex((line) => /^#{1,6}\s/.test(line));
+
+    if (firstHeading < 0) {
+      const brief = lines.map(tidyLine).filter(Boolean).slice(0, 6).join('\n');
+      return { brief, full: lines.map(tidyLine).filter(Boolean).join('\n') };
+    }
+
+    const start = lines[firstHeading].startsWith('##') ? firstHeading + 1 : firstHeading;
+    const section = [];
+
+    for (let i = start; i < lines.length; i += 1) {
+      if (/^##\s/.test(lines[i])) break;
+      section.push(lines[i]);
+    }
+
+    const brief = section.map(tidyLine).filter(Boolean).slice(0, 5).join('\n');
+    const full = lines.map(tidyLine).filter(Boolean).join('\n');
+
+    return { brief, full };
+  }
+
+  function showNotes(raw) {
+    const picked = pickLatest(raw);
+    fullNotes = picked.full;
+    briefNotes = picked.brief;
+    noteText.textContent = picked.brief;
+    noteText.classList.remove('expanded');
+
+    if (noteMore) {
+      const longEnough = picked.full.length > picked.brief.length + 40 || picked.brief.split('\n').length >= 5;
+      noteMore.hidden = !longEnough;
+      noteMore.textContent = '展开全部更新';
+    }
+  }
 
   function setStatus(text) {
     if (status) {
@@ -39,7 +92,8 @@
       apkUrl = data.apkUrl || '';
       const notes = (data.notes || '').trim();
       if (data.hasUpdate) {
-        noteText.textContent = notes || '有新版本可以更新。';
+        if (notes) showNotes(notes);
+        else noteText.textContent = '有新版本可以更新。';
         box.hidden = false;
         dlBtn.hidden = false;
         setStatus('发现新版本 ' + data.latest);
@@ -49,7 +103,7 @@
       setStatus('已经是最新版本了');
       dlBtn.hidden = true;
       if (notes) {
-        noteText.textContent = notes;
+        showNotes(notes);
         box.hidden = false;
       } else {
         box.hidden = true;
@@ -61,6 +115,14 @@
       btn.disabled = false;
       btn.textContent = '检查更新';
     }
+  }
+
+  if (noteMore) {
+    noteMore.addEventListener('click', () => {
+      const expanded = noteText.classList.toggle('expanded');
+      noteText.textContent = expanded ? fullNotes : briefNotes;
+      noteMore.textContent = expanded ? '收起' : '展开全部更新';
+    });
   }
 
   btn.addEventListener('click', () => check(true));

@@ -58,6 +58,7 @@ const auth = require('./auth-api');
 app.use(auth.middleware);
 app.use(auth.gate);
 require('./auth-api')(app);
+require('./auth-recover-api')(app);
 require('./chat-api')(app, db);
 require('./ui-settings-api')(app, db);
 require('./theater-api')(app, db);

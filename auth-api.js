@@ -246,3 +246,4 @@ module.exports.middleware = middleware;
 module.exports.gate = gate;
 module.exports.COOKIE = COOKIE;
 module.exports.readCookie = readCookie;
+module.exports.setSessionCookie = setSessionCookie;
