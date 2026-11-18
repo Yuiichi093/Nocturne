@@ -55,15 +55,17 @@
     <h2>更多</h2>
     <button class="menu-btn" id="plusNarration" type="button">旁白</button>
     <button class="menu-btn" id="plusRegenerate" type="button">重新生成</button>
+    <button class="menu-btn" id="plusSuggest" type="button">帮我想几句</button>
     <button class="menu-btn" id="plusImage" type="button">图片</button>
     <button class="menu-btn ghost" data-chat-close type="button">取消</button>
   </div>
 
   <div class="menu-sheet chat-sheet" id="chatRegenSheet">
     <div class="sheet-handle"></div>
-    <h2>重新生成</h2>
+    <h2 id="chatRegenTitle">重新生成</h2>
     <p class="chat-sheet-tip" id="chatRegenTip">挑一个满意的，不满意就换一批。</p>
     <div class="regen-list" id="chatRegenList"></div>
+    <div class="regen-list" id="suggestList" hidden></div>
     <button class="menu-btn" id="chatRegenReroll" type="button">换一批</button>
     <button class="menu-btn ghost" data-chat-close type="button">取消</button>
   </div>
@@ -115,6 +117,14 @@
     </div>
 
     <div class="field">
+      <label>头像形状</label>
+      <div class="shape-row" id="avatarShapeRow">
+        <button class="shape-option" data-avatar-shape="circle" type="button">圆形</button>
+        <button class="shape-option" data-avatar-shape="square" type="button">方角</button>
+      </div>
+    </div>
+
+    <div class="field">
       <label>我的气泡颜色</label>
       <div class="color-row">
         <input id="userColorPicker" type="color" value="#E6E0EF">
@@ -147,6 +157,7 @@
     </div>
   </div>
 
+  <script src="/ui-settings.js"></script>
   <script src="/chat.js"></script>
   <script src="/chat-panel.js"></script>
   <script src="/chat-actions.js"></script>

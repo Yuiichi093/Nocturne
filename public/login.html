@@ -224,6 +224,25 @@
 
     .reset-panel .primary-btn { margin-top: 2px; }
 
+    .reset-list {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 2;
+    }
+
+    .reset-list[hidden] { display: none; }
+
+    .reset-list button {
+      margin: 0 6px 0 0;
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: transparent;
+      color: var(--ink);
+      font-size: 12px;
+    }
+
     .foot {
       margin: 16px 0 0;
       color: var(--muted);
@@ -320,6 +339,8 @@
           <label for="resetPassword2">再输一次新密码</label>
           <input id="resetPassword2" type="password" maxlength="128" placeholder="再输一次">
         </div>
+
+        <p class="reset-list" id="resetList" hidden></p>
 
         <p class="error" id="resetError" role="alert" hidden></p>
         <p class="hint" id="resetOk" hidden></p>
@@ -491,11 +512,64 @@
       if (message) resetOk.hidden = true;
     }
 
+    const resetListEl = $('resetList');
+
     function closeReset() {
       resetPanel.hidden = true;
       resetError.hidden = true;
       resetOk.hidden = true;
+      resetListEl.hidden = true;
+      resetListEl.innerHTML = '';
     }
+
+    // 忘了用户名时：把这台手机上的账号列出来，点一下就填进去
+    async function loadUsernames() {
+      const confirm = $('resetConfirm').value.trim();
+
+      if (confirm.replace(/\s+/g, '') !== '我要重置密码') {
+        return showResetError('先把确认短语原样填上：我要重置密码');
+      }
+
+      try {
+        const res = await fetch('/api/auth/usernames', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ confirm })
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          return showResetError((data && data.error) || '列不出来，稍后再试');
+        }
+
+        const users = (data && data.users) || [];
+
+        if (!users.length) {
+          resetListEl.textContent = '这台手机上还没有账号，去「注册」建一个吧。';
+          resetListEl.hidden = false;
+          return;
+        }
+
+        resetListEl.innerHTML =
+          '这台手机上的账号：' +
+          users.map((u) => '<button type="button" data-username="' +
+            String(u.username).replace(/"/g, '&amp;quot;') +
+            '">' + String(u.username).replace(/</g, '&amp;lt;') + '</button>'
+          ).join('');
+        resetListEl.hidden = false;
+        resetError.hidden = true;
+      } catch (e) {
+        showResetError('连不上服务，稍后再试一下');
+      }
+    }
+
+    resetListEl.addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-username]');
+      if (!btn) return;
+      $('resetUser').value = btn.dataset.username;
+      showResetError('');
+    });
 
     $('forgotBtn').addEventListener('click', () => {
       const open = resetPanel.hidden;
@@ -543,6 +617,8 @@
 
         if (!res.ok) {
           showResetError((data && data.error) || '重置失败，稍后再试');
+          // 用户名对不上最常见：直接把本机账号列出来给她点
+          if (res.status === 404) loadUsernames();
           return;
         }
 

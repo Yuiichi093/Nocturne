@@ -176,6 +176,23 @@ module.exports = function registerAuth(app) {
   });
 
   /**
+   * 忘了用户名时用：列出这台手机上已有的账号。
+   * 和重置密码一样要手输确认短语，因为「人在手机前」是这台设备唯一能做的验证。
+   */
+  app.post('/api/auth/usernames', (req, res) => {
+    const body = req.body || {};
+    const confirm = String(body.confirm || '').replace(/\s+/g, '');
+
+    if (confirm !== '我要重置密码') {
+      return res.status(400).json({
+        error: '确认短语不对，请原样输入：我要重置密码'
+      });
+    }
+
+    res.json({ users: authDb.listUsers() });
+  });
+
+  /**
    * 本机重置密码：忘了密码时用。
    * 这个 App 的数据只在这台设备上，没有邮箱/短信可验证，所以验证方式就是
    * 「人在这台手机前」——必须手输固定确认短语，改完会踢掉所有登录状态。

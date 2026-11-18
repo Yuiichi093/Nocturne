@@ -7,7 +7,7 @@ module.exports = function (app, db) {
   const { getActiveWorldId } = require('./worlds');
 const { getWorldbookContext, getWorldbookContextByNames } = require('./worldbook');
 const { getCalendarContext } = require('./calendar-context');
-const { describeImage, requestChat } = require('./llm');
+const { describeImage, requestChat, parseJsonLoose, stripCodeFence } = require('./llm');
 
   const DEFAULT_CHAT_STYLE = `【全局聊天风格】
 你是在用手机和用户聊天，不是在写小说。
@@ -856,6 +856,199 @@ const { describeImage, requestChat } = require('./llm');
     } catch (error) {
       res.status(error.status || 500).json({
         error: error.name === 'AbortError' ? '模型请求超时' : error.message
+      });
+    }
+  });
+
+  // 把模型给的回复建议解析成字符串数组：优先 JSON 数组，退化成按行切
+  function parseSuggestions(content, limit) {
+    const raw = String(content || '').trim();
+    const picked = [];
+
+    const push = (value) => {
+      let text = String(value == null ? '' : value)
+        .replace(/^[\s\-*•·[\]()]+/, '')
+        .replace(/^\d+[.、)]\s*/, '')
+        .replace(/^["“”'‘’]+/, '')
+        .replace(/["“”'‘’\s]+$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!text) return;
+      if (text.length > 240) text = text.slice(0, 240);
+
+      if (!picked.includes(text)) picked.push(text);
+    };
+
+    let parsed = parseJsonLoose(raw);
+
+    // 模型有时会先来一句「这是几条建议：」，parseJsonLoose 只认对象，这里再按数组捞一次
+    if (!parsed) {
+      const start = raw.indexOf('[');
+      const end = raw.lastIndexOf(']');
+
+      if (start >= 0 && end > start) {
+        try {
+          parsed = JSON.parse(raw.slice(start, end + 1));
+        } catch (e) {}
+      }
+    }
+
+    if (Array.isArray(parsed)) {
+      parsed.forEach(push);
+    } else if (parsed && typeof parsed === 'object') {
+      const list = parsed.suggestions || parsed.replies || parsed.items || parsed.list;
+
+      if (Array.isArray(list)) list.forEach(push);
+      else if (typeof parsed.text === 'string') push(parsed.text);
+    }
+
+    if (!picked.length) {
+      // 不是标准 JSON 就按行切，顺便跳过模型爱加的开场白
+      for (const line of stripCodeFence(raw).split(/\n+/)) {
+        const text = line.trim();
+
+        if (!text) continue;
+        if (/^(好的|当然|没问题|以下是|下面是|建议)[，,：:]?$/.test(text)) continue;
+
+        push(text);
+      }
+    }
+
+    return picked.slice(0, limit);
+  }
+
+  // 聊天「帮我想几句」：按当前剧情/角色设定，替用户想几条可以直接发出去的话
+  app.post('/api/characters/:id/suggest-replies', async (req, res) => {
+    const character = db.prepare('SELECT * FROM characters WHERE id = ?')
+      .get(req.params.id);
+
+    if (!character) {
+      return res.status(404).json({ error: '角色不存在' });
+    }
+
+    const modelRow = db.prepare(`
+      SELECT * FROM model_profiles
+      WHERE is_image = 0
+      ORDER BY is_default DESC, id DESC
+      LIMIT 1
+    `).get();
+
+    if (!modelRow) {
+      return res.status(400).json({
+        error: '还没有配置文本模型，先去「模型 API」里加一个'
+      });
+    }
+
+    const recent = db.prepare(`
+      SELECT role, content, narration FROM messages
+      WHERE character_id = ?
+      ORDER BY id DESC
+      LIMIT 12
+    `).all(req.params.id).reverse();
+
+    if (!recent.length) {
+      return res.status(400).json({
+        error: '还没有聊天记录，先随便说一句再来'
+      });
+    }
+
+    const body = req.body || {};
+    const count = Math.min(Math.max(Number(body.count) || 3, 1), 5);
+
+    let userPersona = null;
+
+    if (Number(character.user_persona_id || 0) > 0) {
+      userPersona = db.prepare('SELECT * FROM user_personas WHERE id = ?')
+        .get(character.user_persona_id);
+    }
+
+    if (!userPersona) {
+      userPersona = db.prepare(`
+        SELECT * FROM user_personas
+        WHERE is_default = 1
+        ORDER BY id ASC
+        LIMIT 1
+      `).get();
+    }
+
+    const transcript = recent.map((row) => {
+      const who = row.role === 'user' ? '我' : character.name;
+      const text = String(row.content || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+      const narration = String(row.narration || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+
+      // 纯图片/纯旁白的气泡 content 可能是空的，别把它拼成「我：」
+      if (!text) return narration ? '（旁白）' + narration : '';
+
+      const line = who + '：' + text;
+
+      return narration ? line + '（旁白：' + narration + '）' : line;
+    }).filter(Boolean).join('\n');
+
+    const characterCard = [
+      '角色名：' + character.name,
+      character.personality ? '性格：' + character.personality : '',
+      character.speaking_style ? '说话风格：' + character.speaking_style : '',
+      character.persona ? '人设：' + character.persona.slice(0, 600) : ''
+    ].filter(Boolean).join('\n');
+
+    const personaLine = userPersona
+      ? '我（用户）的人设：' + userPersona.name +
+        (userPersona.bio ? '，' + userPersona.bio : '') +
+        (userPersona.persona ? '\n' + userPersona.persona.slice(0, 400) : '')
+      : '';
+
+    const messages = [
+      {
+        role: 'system',
+        content: [
+          '你在帮用户想接下来可以发出去的消息。',
+          '用户正在和「' + character.name + '」聊天，你要站在用户自己的角度，写几条用户真的会发出去的话。',
+          '要求：',
+          '1. 每条 1~2 句，口语化，像微信聊天，不要书面语；',
+          '2. 各条的切入角度要不一样（比如一条顺着聊、一条好奇追问、一条带点玩笑或小情绪）；',
+          '3. 只写用户会说的话，不要写角色会说的话，不要加旁白、动作描写、引号或编号；',
+          '4. 只输出 JSON 字符串数组，例如 ["……","……","……"]，不要输出任何解释。'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: [
+          characterCard,
+          personaLine,
+          '最近对话：\n' + transcript,
+          '请给 ' + count + ' 条建议。'
+        ].filter(Boolean).join('\n\n')
+      }
+    ];
+
+    const payload = {
+      model: modelRow.model,
+      messages,
+      temperature: Math.min(1.2, Math.max(0.7, Number(modelRow.temperature ?? 0.85))),
+      max_tokens: Math.min(Math.max(Number(modelRow.max_tokens) || 700, 400), 900)
+    };
+
+    try {
+      const { content } = await requestChat(modelRow, payload, { timeoutMs: 30000 });
+      const suggestions = parseSuggestions(content, count);
+
+      if (!suggestions.length) {
+        return res.status(502).json({ error: '模型没写出建议，再试一次' });
+      }
+
+      res.json({ suggestions });
+    } catch (error) {
+      // requestChat 已经把超时包成 504、上游/网络错误包成 502，这里原样透出，不吞成 500。
+      // 模型「只思考不写正文 / 返回空」这类没有状态码的，按契约统一成「没写出建议」。
+      if (!error.status) {
+        console.error('[建议回复] 出错了：', error);
+
+        return res.status(502).json({ error: '模型没写出建议，再试一次' });
+      }
+
+      res.status(Number(error.status)).json({
+        error: error.message || '生成建议失败，再试一次'
       });
     }
   });

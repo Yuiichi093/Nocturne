@@ -59,6 +59,7 @@ app.use(auth.middleware);
 app.use(auth.gate);
 require('./auth-api')(app);
 require('./chat-api')(app, db);
+require('./ui-settings-api')(app, db);
 require('./theater-api')(app, db);
 require('./theater-play-api')(app, db);
 require('./theater-extra-api')(app, db);

@@ -78,6 +78,12 @@ function findByName(username) {
   return conn.prepare('SELECT * FROM users WHERE username = ?').get(String(username || '').trim());
 }
 
+function listUsers() {
+  return conn.prepare(
+    'SELECT username, nickname, created_at FROM users ORDER BY id ASC'
+  ).all();
+}
+
 function getById(id) {
   return conn.prepare('SELECT * FROM users WHERE id = ?').get(Number(id));
 }
@@ -171,6 +177,7 @@ purgeExpired();
 module.exports = {
   file: authFile,
   countUsers,
+  listUsers,
   findByName,
   getById,
   createUser,

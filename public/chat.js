@@ -848,6 +848,60 @@
     $('menuBackdrop').classList.add('open');
   }
 
+  // ---- 头像形状：圆形 / 方角（存 /api/settings/ui） ----
+  function currentAvatarShape() {
+    return document.body.classList.contains('chat-avatar-square')
+      ? 'square'
+      : 'circle';
+  }
+
+  function applyAvatarShape(shape) {
+    const square = shape === 'square';
+
+    document.body.classList.toggle('chat-avatar-square', square);
+
+    document.querySelectorAll('[data-avatar-shape]').forEach((button) => {
+      button.classList.toggle(
+        'active',
+        button.dataset.avatarShape === (square ? 'square' : 'circle')
+      );
+    });
+  }
+
+  async function loadUiSettings() {
+    const settingsApi = window.__nocturneUiSettings;
+    if (!settingsApi) return;
+
+    const settings = await settingsApi.load();
+    applyAvatarShape(settings.avatar_shape);
+  }
+
+  document.querySelectorAll('[data-avatar-shape]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const previous = currentAvatarShape();
+      const next = button.dataset.avatarShape;
+
+      if (next === previous) return;
+
+      applyAvatarShape(next);
+
+      const settingsApi = window.__nocturneUiSettings;
+      if (!settingsApi) return;
+
+      button.disabled = true;
+
+      try {
+        await settingsApi.save({ avatar_shape: next });
+      } catch (error) {
+        // 乐观更新失败就退回去，并说清楚
+        applyAvatarShape(previous);
+        alert('头像形状没保存成功：' + (error && error.message));
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+
   function closeMenu() {
     $('menuSheet').classList.remove('open');
     $('menuBackdrop').classList.remove('open');
@@ -1034,6 +1088,11 @@
   // 启动链：角色 → 人设 → 消息。每一步都自带兜底，任何一步失败都不能
   // 让后面的步骤被吞掉（之前 personas 一出错，聊天记录就永远不加载）。
   async function boot() {
+    // 界面设置跟聊天数据互不依赖，先并行拉，失败也只打日志
+    loadUiSettings().catch((error) => {
+      console.warn('界面设置读取失败：' + (error && error.message));
+    });
+
     const characterReady = await loadCharacter();
     if (!characterReady) return;
 
