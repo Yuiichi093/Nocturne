@@ -15,7 +15,9 @@
  * 都会先把结构准备好。所有语句都是 IF NOT EXISTS / 存在性检查，可反复执行。
  */
 
-const db = require('./db');
+// 现在不再是「require 即执行」，而是被 userdata.js 对每个账号的库调用一次。
+// 参数 db 就是那个账号的数据库连接。
+module.exports = function migrate(db) {
 
 function createTable(sql) {
   db.exec(sql);
@@ -258,6 +260,7 @@ createTable(`
 addColumnIfMissing('messages', 'sticker_id', 'INTEGER');
 addColumnIfMissing('messages', 'narration', "TEXT NOT NULL DEFAULT ''");
 addColumnIfMissing('messages', 'image_url', "TEXT NOT NULL DEFAULT ''");
+addColumnIfMissing('messages', 'image_desc', "TEXT NOT NULL DEFAULT ''");
 addColumnIfMissing('model_profiles', 'is_vision', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('model_profiles', 'is_image', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('characters', 'ref_image', "TEXT NOT NULL DEFAULT ''");
@@ -393,4 +396,27 @@ if (Number(holidayCount) === 0) {
 // 评论可能是用户写的（character_id 为空），也可能是角色写的（存角色 id）。
 addColumnIfMissing('moment_comments', 'character_id', 'INTEGER');
 
-module.exports = { run: () => true, defaultWorldId };
+/* ========== 21. 模型用量账本 ========== */
+// 每成功调一次模型记一行：界面据此算今天/7 天/30 天花了多少 token、估多少钱。
+// 多账号下各库独立，不需要 user_id 列。
+createTable(`
+  CREATE TABLE IF NOT EXISTS usage_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    source TEXT NOT NULL DEFAULT 'chat',
+    model TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    character_id INTEGER NOT NULL DEFAULT 0,
+    character_name TEXT NOT NULL DEFAULT ''
+  );
+`);
+
+createTable(`
+  CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
+`);
+
+  return { defaultWorldId };
+};

@@ -982,3 +982,127 @@ body.narration-open .messages {
   object-fit: cover;
   border-radius: 14px;
 }
+
+/* ---- 头像形状：默认圆形，body.chat-avatar-square 才变方角 ----
+   原有 .msg-avatar / .header-avatar 的规则不动，这里只做覆盖。 */
+body:not(.chat-avatar-square) .msg-avatar,
+body:not(.chat-avatar-square) .header-avatar,
+body:not(.chat-avatar-square) .avatar {
+  border-radius: 50%;
+}
+
+body.chat-avatar-square .msg-avatar,
+body.chat-avatar-square .header-avatar,
+body.chat-avatar-square .avatar {
+  border-radius: 6px;
+}
+
+/* 图片始终 cover，方角也不拉变形 */
+body.chat-avatar-square .msg-avatar img,
+body.chat-avatar-square .header-avatar img {
+  object-fit: cover;
+}
+
+/* ---- 聊天设置里的「头像形状」选项 ---- */
+.shape-row {
+  display: flex;
+  gap: 8px;
+}
+
+.shape-row .shape-option {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.shape-row .shape-option.active {
+  border-color: var(--ink);
+  font-weight: 600;
+}
+
+.shape-row .shape-option:disabled {
+  opacity: .55;
+}
+
+/* 「帮我想几句」复用 .regen-card，只是隐藏时不能被 .regen-list 的 grid 顶掉 */
+#suggestList[hidden],
+#chatRegenList[hidden] {
+  display: none;
+}
+
+
+/* ---- 省 token（聊天设置里的小组）：模式开关 + 带多少条历史 ---- */
+
+.lean-group {
+  margin: 4px 0 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.lean-group .lean-note {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.lean-group .lean-row {
+  margin: 0 0 6px;
+}
+
+.lean-group .lean-row span {
+  font-size: 13px;
+}
+
+.lean-hint {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.lean-hint[hidden] {
+  display: none;
+}
+
+.lean-group .field {
+  margin-bottom: 8px;
+}
+
+.lean-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.lean-status[hidden] {
+  display: none;
+}
+
+.lean-status.error {
+  color: var(--danger, #c62828);
+}
+
+/* 一键最省：省 token 小组里的快捷键 */
+.lean-preset {
+  width: 100%;
+  margin: 2px 0 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.lean-preset:disabled {
+  opacity: .55;
+}

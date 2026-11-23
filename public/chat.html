@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Nocturne · 聊天</title>
+  <script src="/auth-guard.js"></script>
   <link rel="stylesheet" href="/chat.css">
 </head>
 <body>
@@ -54,15 +55,17 @@
     <h2>更多</h2>
     <button class="menu-btn" id="plusNarration" type="button">旁白</button>
     <button class="menu-btn" id="plusRegenerate" type="button">重新生成</button>
+    <button class="menu-btn" id="plusSuggest" type="button">帮我想几句</button>
     <button class="menu-btn" id="plusImage" type="button">图片</button>
     <button class="menu-btn ghost" data-chat-close type="button">取消</button>
   </div>
 
   <div class="menu-sheet chat-sheet" id="chatRegenSheet">
     <div class="sheet-handle"></div>
-    <h2>重新生成</h2>
+    <h2 id="chatRegenTitle">重新生成</h2>
     <p class="chat-sheet-tip" id="chatRegenTip">挑一个满意的，不满意就换一批。</p>
     <div class="regen-list" id="chatRegenList"></div>
+    <div class="regen-list" id="suggestList" hidden></div>
     <button class="menu-btn" id="chatRegenReroll" type="button">换一批</button>
     <button class="menu-btn ghost" data-chat-close type="button">取消</button>
   </div>
@@ -75,7 +78,7 @@
       <label>或者让 AI 画一张（描述画面）</label>
       <textarea
         id="chatImagePrompt"
-        placeholder="例如：清晨的厨房，她在煎蛋"
+        placeholder="描述想看的画面"
       ></textarea>
     </div>
     <button class="menu-btn" id="imageGenerateBtn" type="button">画一张并发送</button>
@@ -114,6 +117,38 @@
     </div>
 
     <div class="field">
+      <label>头像形状</label>
+      <div class="shape-row" id="avatarShapeRow">
+        <button class="shape-option" data-avatar-shape="circle" type="button">圆形</button>
+        <button class="shape-option" data-avatar-shape="square" type="button">方角</button>
+      </div>
+    </div>
+
+    <div class="lean-group" id="leanGroup">
+      <p class="lean-note">聊天越久，每次带上的历史越多，花得也越多。</p>
+
+      <div class="row lean-row">
+        <span>省 token 模式</span>
+        <input id="leanModeToggle" type="checkbox">
+      </div>
+      <p class="lean-hint" id="leanModeHint" hidden>少发一次补问请求，长回复省一点。</p>
+
+      <div class="field">
+        <label for="contextLimitSelect">带多少条历史</label>
+        <select id="contextLimitSelect">
+          <option value="40">40 条（完整）</option>
+          <option value="28">28 条</option>
+          <option value="20">20 条</option>
+          <option value="12">12 条（最省）</option>
+        </select>
+      </div>
+
+      <button class="lean-preset" id="leanPresetBtn" type="button">一键最省</button>
+
+      <p class="lean-status" id="leanStatus" role="status" hidden></p>
+    </div>
+
+    <div class="field">
       <label>我的气泡颜色</label>
       <div class="color-row">
         <input id="userColorPicker" type="color" value="#E6E0EF">
@@ -146,9 +181,12 @@
     </div>
   </div>
 
+  <script src="/ui-settings.js"></script>
+  <script src="/chat-lean.js"></script>
   <script src="/chat.js"></script>
   <script src="/chat-panel.js"></script>
   <script src="/chat-actions.js"></script>
   <script src="/back-nav.js"></script>
+  <script src="/save-image.js"></script>
 </body>
 </html>

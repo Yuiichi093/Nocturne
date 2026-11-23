@@ -95,10 +95,44 @@
   async function loadChats() {
     try {
       const response = await fetch('/api/chats');
-      rows = await response.json();
+
+      if (!response.ok) {
+        throw new Error(response.status === 401 ? '要重新登录' : '服务器返回 ' + response.status);
+      }
+
+      const data = await response.json();
+
+      // 接口出错时返回的是 { error: "…" }，直接当数组用会炸
+      rows = Array.isArray(data) ? data : [];
       render();
+
+      if (!Array.isArray(data)) {
+        list.innerHTML =
+          '<div class="chat-empty">加载失败：' +
+          escapeHtml((data && data.error) || '返回的数据不对') +
+          '</div>';
+      }
     } catch (error) {
-      list.innerHTML = '<div class="chat-empty">加载失败：' + escapeHtml(error.message) + '</div>';
+      const isNetwork = /Failed to fetch|NetworkError|Load failed/i.test(error.message || '');
+      list.innerHTML =
+        '<div class="chat-empty">' +
+        (isNetwork
+          ? '连不上 App 里的服务，可能还在启动。'
+          : '加载失败：') +
+        '<button type="button" class="ghost-btn" id="chatsRetry">重试</button>' +
+        '</div>';
+
+      const retry = document.getElementById('chatsRetry');
+      if (retry) {
+        retry.addEventListener('click', () => {
+          list.innerHTML = '<div class="chat-empty">加载中…</div>';
+          loadChats();
+        });
+      }
+
+      if (isNetwork) {
+        console.warn('[消息] ' + error.message);
+      }
     }
   }
 

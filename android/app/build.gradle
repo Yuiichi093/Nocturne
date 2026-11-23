@@ -11,8 +11,8 @@ android {
         applicationId 'com.huaxueyi.rolephone'
         minSdk 26
         targetSdk 34
-        versionCode 3
-        versionName '1.0.2'
+        versionCode 21
+        versionName '1.2.16'
 
         ndk {
             // 只打 arm64-v8a：现在的中低端手机都是 64 位，多两个架构会让安装包大两倍多
@@ -26,10 +26,30 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            // 密钥文件不进仓库：CI 里由 secret 解出来放在 android/app/release.keystore
+            def ksPath = System.getenv('ROLEPHONE_KEYSTORE')
+            def ksPass = System.getenv('ROLEPHONE_KEYSTORE_PASSWORD')
+            if (ksPass) {
+                storeFile file(ksPath ?: 'release.keystore')
+                storeType 'PKCS12'
+                storePassword ksPass
+                keyAlias System.getenv('ROLEPHONE_KEY_ALIAS') ?: 'nocturne'
+                keyPassword System.getenv('ROLEPHONE_KEY_PASSWORD') ?: ksPass
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // 没配密钥时仍然能编（未签名的包，装不了，只用来验证编译）
+            def ksPass = System.getenv('ROLEPHONE_KEYSTORE_PASSWORD')
+            if (ksPass) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 

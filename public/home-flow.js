@@ -5,6 +5,7 @@
   const profile = content.querySelector('[data-home-card="profile"]');
   const notifications = content.querySelector('[data-home-card="notifications"]');
   const memo = content.querySelector('[data-home-card="memo"]');
+  const note = content.querySelector('[data-home-card="note"]');
   const imageLayer = document.getElementById('homeImageLayer');
   const widgets = content.querySelector('.home-widgets');
 
@@ -37,6 +38,7 @@
   profile.dataset.flowId = 'profile';
   notifications.dataset.flowId = 'notifications';
   memo.dataset.flowId = 'memo';
+  if (note) note.dataset.flowId = 'note';
 
   function saveImages() {
     localStorage.setItem(imagesKey, JSON.stringify(images));
@@ -53,6 +55,7 @@
   function normalizeOrder() {
     const ids = [
       'profile',
+      ...(note ? ['note'] : []),
       ...images.map((img) => 'image:' + img.id),
       'notifications',
       'memo'
@@ -104,6 +107,7 @@
     map.set('profile', profile);
     map.set('notifications', notifications);
     map.set('memo', memo);
+    if (note) map.set('note', note);
 
     images.forEach((item) => {
       let el = flow.querySelector(
@@ -177,7 +181,7 @@
   flow.addEventListener('pointerdown', (event) => {
     const item = event.target.closest('.home-flow-item');
     if (!item) return;
-    if (event.target.closest('input, button, a, label, [contenteditable]')) return;
+    if (event.target.closest('input, button, a, label, [contenteditable], textarea')) return;
 
     if (document.body.classList.contains('layout-mode')) {
       startDrag(item, event);
@@ -235,6 +239,17 @@
   });
 
   flow.addEventListener('click', (event) => {
+    const noteDelete = event.target.closest('[data-delete-note]');
+
+    if (noteDelete) {
+      event.stopPropagation();
+
+      if (!confirm('删除这条便签？')) return;
+
+      note.dispatchEvent(new CustomEvent('home-note-delete', { bubbles: true }));
+      return;
+    }
+
     const button = event.target.closest('[data-delete-image]');
     if (!button) return;
 

@@ -9,11 +9,24 @@ const { getActiveWorldId } = require('./worlds');
 const app = express();
 const PORT = process.env.PORT || 8787;
 
-const uploadDir = path.join(__dirname, 'data', 'uploads');
-fs.mkdirSync(uploadDir, { recursive: true });
+// 多账号后每个账号有自己的图片目录：data/users/<id>/uploads
+function uploadsDirFor(req) {
+  if (!req.user) {
+    throw new Error('未登录，不知道该把图片存给谁');
+  }
+  const dir = path.join(db.userDir(req.user.id), 'uploads');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
+  destination: (req, file, cb) => {
+    try {
+      cb(null, uploadsDirFor(req));
+    } catch (error) {
+      cb(error);
+    }
+  },
   filename: (req, file, cb) => {
     // 扩展名不能听客户端的，否则传个 x.html 也能被当网页执行
     const rawExt = path.extname(file.originalname).toLowerCase();
@@ -29,14 +42,26 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith('image/')) {
-      return cb(new Error('只允许上传图片'));
+      const error = new Error('只允许上传图片');
+      error.status = 415;
+      return cb(error);
     }
     cb(null, true);
   }
 });
 
 app.use(express.json({ limit: '10mb' }));
+
+// 账号系统：先认出 cookie 里的账号（把后续处理包进该账号的数据库上下文），
+// 再把没登录的挡在门外。必须排在所有接口和静态目录之前。
+const auth = require('./auth-api');
+app.use(auth.middleware);
+app.use(auth.gate);
+require('./auth-api')(app);
+require('./auth-recover-api')(app);
 require('./chat-api')(app, db);
+require('./ui-settings-api')(app, db);
+require('./usage-api')(app, db);
 require('./theater-api')(app, db);
 require('./theater-play-api')(app, db);
 require('./theater-extra-api')(app, db);
@@ -50,13 +75,18 @@ require('./identity-options-api')(app, db);
 require('./profile-api')(app, db);
 require('./sticker-api')(app, db);
 require('./image-api')(app, db);
+require('./update-api')(app);
 // 上传的图片文件名带时间戳和随机串，内容永不会变，可以放心长期缓存。
 // 必须挂在 no-store 中间件之前，否则会被一并禁止缓存，
 // 结果就是每翻一页、每开一次首页，所有头像和背景图都要重新下载。
-app.use('/uploads', express.static(uploadDir, {
-  maxAge: '365d',
-  immutable: true
-}));
+// 图片按账号隔离：同一个 /uploads/xxx.jpg 只在这个账号登录时能取到
+app.use('/uploads', (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).end();
+  }
+  const dir = path.join(db.userDir(req.user.id), 'uploads');
+  express.static(dir, { maxAge: '365d', immutable: true })(req, res, next);
+});
 
 // 其余接口和前端代码继续保持不缓存：改完代码刷新就能生效，不用手动清缓存。
 app.use((req, res, next) => {
@@ -64,11 +94,71 @@ app.use((req, res, next) => {
   next();
 });
 
+// 图片到底是不是图片，得看文件头，不能听客户端报的 mimetype。
+// 手机相机的 HEIC 也会报成 image/*，存下来浏览器根本解不出来，
+// 表现就是「图传上去了但哪儿都不显示」，而且一点报错都没有。
+function sniffImageExt(filePath) {
+  let head;
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    head = Buffer.alloc(16);
+    fs.readSync(fd, head, 0, 16, 0);
+    fs.closeSync(fd);
+  } catch (e) {
+    return null;
+  }
+
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'jpg';
+  if (head.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
+  if (head.slice(0, 3).toString('latin1') === 'GIF') return 'gif';
+  if (head.slice(0, 4).toString('latin1') === 'RIFF' &&
+      head.slice(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return null;
+}
+
+function isHeic(filePath) {
+  let head;
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    head = Buffer.alloc(32);
+    fs.readSync(fd, head, 0, 32, 0);
+    fs.closeSync(fd);
+  } catch (e) {
+    return false;
+  }
+  const brand = head.slice(8, 32).toString('latin1');
+  return /heic|heix|hevc|heim|heis|mif1|msf1/.test(brand);
+}
+
 app.post('/api/upload', upload.single('image'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: '没有收到图片' });
   }
-  res.json({ url: '/uploads/' + req.file.filename });
+
+  const ext = sniffImageExt(req.file.path);
+
+  if (!ext) {
+    const heic = isHeic(req.file.path);
+    try { fs.unlinkSync(req.file.path); } catch (e) {}
+
+    return res.status(400).json({
+      error: heic
+        ? '这张图是 HEIC 格式，浏览器显示不了，先转成 JPG 或 PNG 再传吧'
+        : '这个文件看着不是图片，换个 JPG / PNG / WEBP 试试'
+    });
+  }
+
+  // 扩展名按真实格式来，免得 jpeg 的头配个 .png 的名字
+  let filename = req.file.filename;
+  if (!filename.toLowerCase().endsWith('.' + ext)) {
+    const renamed = filename.replace(/\.[^.]*$/, '.' + ext);
+    try {
+      fs.renameSync(req.file.path, path.join(path.dirname(req.file.path), renamed));
+      filename = renamed;
+    } catch (e) {}
+  }
+
+  res.json({ url: '/uploads/' + filename });
 });
 
 app.get('/api/health', (req, res) => {
@@ -792,9 +882,25 @@ app.delete('/api/characters/:id', (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// 客户端错误（传错文件、body 太大、JSON 写坏了）不该报成 500，
+// 也不能把 express 的原始报错原文直接甩到前端。
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: err.message || '服务器错误' });
+  const status = Number(err.status || err.statusCode) ||
+    (err.code === 'LIMIT_FILE_SIZE' ||
+      err.type === 'entity.too.large' ? 413 :
+      err.type === 'entity.parse.failed' ? 400 : 500);
+
+  const friendly = {
+    400: '请求格式不对',
+    413: '文件太大了，换个小一点的',
+    415: err.message || '只允许上传图片'
+  };
+
+  if (status >= 500) console.error(err);
+
+  res.status(status).json({
+    error: status >= 500 ? (err.message || '服务器错误') : (friendly[status] || err.message)
+  });
 });
 
 // 定时备份：服务跑着的时候每天自动给数据库留一份快照，保留最近 7 份。
@@ -803,6 +909,33 @@ require('./backup-worker')(db);
 // 朋友圈：角色定时自主发动态 / 评论
 require('./moment-ai').startAutoPilot();
 
-app.listen(PORT, '127.0.0.1', () => {
+const httpServer = app.listen(PORT, '127.0.0.1', () => {
   console.log('Nocturne 已启动：http://127.0.0.1:' + PORT);
+});
+
+httpServer.on('error', (e) => {
+  console.error('监听失败：' + (e && e.stack ? e.stack : e));
+});
+
+// 诊断：node 有时会在启动后自己退出（exit code 0），留个心跳看它到底还在不在。
+// 这个定时的 interval 同时也是让事件循环保持活跃的把手。
+let heartbeat = 0;
+setInterval(() => {
+  heartbeat++;
+  // 只在前一分钟留痕，之后安静地守着事件循环，免得 boot.log 一直长
+  if (process.uptime() < 60) {
+    console.log('心跳 ' + heartbeat + '，已跑 ' + Math.round(process.uptime())
+      + ' 秒，listening=' + httpServer.listening);
+  }
+}, 10 * 1000);
+
+process.on('beforeExit', (code) => {
+  // 正常情况不该走到这里：还有 HTTP 服务在跑，事件循环不该空
+  let handles = -1;
+  try {
+    handles = process._getActiveHandles().length;
+  } catch (e) {
+    handles = -2;
+  }
+  console.log('beforeExit code=' + code + '，活跃句柄 ' + handles);
 });

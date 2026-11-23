@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Nocturne · 人设管理</title>
+  <script src="/auth-guard.js"></script>
   <style>
     :root {
       --bg: #f7f7f7;
@@ -227,7 +228,7 @@
 
       <div class="field">
         <label>名字</label>
-        <input id="pName" placeholder="例如：柚" required>
+        <input id="pName" placeholder="" required>
       </div>
 
       <div class="field">
@@ -282,7 +283,7 @@
 
       <div class="field">
         <label>角色名</label>
-        <input id="cName" placeholder="例如：雪一" required>
+        <input id="cName" placeholder="" required>
       </div>
 
       <div class="field">
@@ -332,12 +333,12 @@
 
       <div class="field">
         <label>标签</label>
-        <input id="cTags" placeholder="例如：冷淡, 雨天, 旧书店">
+        <input id="cTags" placeholder="用逗号隔开">
       </div>
 
       <div class="field">
         <label>生日</label>
-        <input id="cBirthday" placeholder="例如：10-03 或 农历八月十五">
+        <input id="cBirthday" placeholder="MM-DD 或 农历八月十五">
       </div>
 
       <div class="actions">
@@ -834,5 +835,6 @@
     })();
   </script>
   <script src="/back-nav.js"></script>
+  <script src="/save-image.js"></script>
 </body>
 </html>

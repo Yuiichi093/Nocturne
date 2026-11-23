@@ -280,7 +280,9 @@ async function generateMomentForCharacter(characterId, options) {
     system,
     user: '发一条朋友圈。',
     temperature: Number(opts.temperature ?? 0.95),
-    maxTokens: 800
+    maxTokens: 800,
+    usageSource: 'moments',
+    character: { id: character.id, name: character.name }
   });
 
   const content = result.content.trim();
@@ -377,7 +379,12 @@ async function generateCommentsForMoment(momentId, options) {
     system,
     user: '请给出评论。',
     temperature: Number(opts.temperature ?? 0.9),
-    maxTokens: 1200
+    maxTokens: 1200,
+    usageSource: 'moments',
+    character: {
+      id: Number(moment.character_id) || 0,
+      name: String(moment.character_name || '')
+    }
   });
 
   const parsed = parseJsonLoose(result.content);
@@ -479,9 +486,23 @@ function startAutoPilot() {
   if (timer) return;
 
   const tick = () => {
-    runAutoTick(false).catch((error) => {
-      console.error('[朋友圈] 自动发布失败：' + error.message);
-    });
+    // 定时器跑在请求之外，没有「当前账号」上下文；以前直接 runAutoTick()
+    // 会全部落到中立的 system.db 上（设置和角色都读不到，所有账号静默失效）。
+    // 这里对每个账号各跑一遍，和 backup-worker 一个套路。
+    let ids = [];
+    try {
+      ids = db.listUserIds();
+    } catch (error) {
+      console.error('[朋友圈] 取账号列表失败：' + error.message);
+      return;
+    }
+    for (const id of ids) {
+      Promise.resolve()
+        .then(() => db.runWithUser(id, () => runAutoTick(false)))
+        .catch((error) => {
+          console.error('[朋友圈] 账号 ' + id + ' 自动发布失败：' + error.message);
+        });
+    }
   };
 
   // 启动 90 秒后再开始，别和服务器启动抢资源

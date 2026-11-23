@@ -55,7 +55,11 @@
     return bubbles[bubbles.length - 1] || null;
   }
 
+  let regenerating = false;
+
   window.regenerateLast = async function () {
+    if (regenerating) return;
+
     const bubble = getLastCharacterBubble();
 
     if (!bubble) {
@@ -63,7 +67,10 @@
       return;
     }
 
-    const button = document.getElementById('refreshBtn');
+    // 页面上没有 #refreshBtn（旧的独立刷新按钮已不存在），
+    // 这里禁用真实存在的「换一批」按钮并加锁，防止连点重复请求。
+    regenerating = true;
+    const button = document.getElementById('chatRegenReroll');
     if (button) button.disabled = true;
 
     try {
@@ -78,7 +85,7 @@
         }
       );
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         throw new Error(data.error || '重新生成失败');
@@ -86,8 +93,11 @@
 
       await softReload();
     } catch (error) {
-      alert('重新生成失败：' + error.message);
+      alert(error && error.message === 'Failed to fetch'
+        ? '连不上服务，请稍后再试'
+        : '重新生成失败：' + error.message);
     } finally {
+      regenerating = false;
       if (button) button.disabled = false;
     }
   };

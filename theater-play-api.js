@@ -1,7 +1,7 @@
 const { getActiveWorldId } = require('./worlds');
 const { getWorldbookContext } = require('./worldbook');
 const { getCalendarContext } = require('./calendar-context');
-const { callModel } = require('./llm');
+const { callModel, requestChat } = require('./llm');
 
 module.exports = function (app, db) {
   function cleanText(value) {
@@ -39,6 +39,77 @@ module.exports = function (app, db) {
     } catch (e) {
       return fallback;
     }
+  }
+
+  // ---------- 省钱：剧情记忆档位 ----------
+  // 一步剧场最贵的是「把全部历史 + 全员角色卡 + 世界书再发一遍」，
+  // 所以这里只压缩老的、最近几步原样保留，观感不变但输入小很多。
+  const THEATER_CONTEXT_LIMITS = [12, 20, 40];
+  const THEATER_CONTEXT_DEFAULT = 20;
+  const LEAN_KEEP_RECENT = 8;
+  const LEAN_OLD_CONTENT_CHARS = 160;
+  const CAST_MAX_CHARS = 120;
+  const CAST_MAX_COUNT = 8;
+  const WORLDBOOK_MAX_CHARS = 1200;
+
+  // 读 app_settings 里的两个键：真实 key 是 ui_ 前缀（设置界面写的），
+  // 兼容不带前缀的写法；脏值一律回默认（精简开、带 20 步）。
+  function readTheaterCostSettings() {
+    const rows = db.prepare(`
+      SELECT key, value FROM app_settings
+      WHERE key IN (
+        'ui_theater_lean', 'ui_theater_context_limit',
+        'theater_lean', 'theater_context_limit'
+      )
+    `).all();
+
+    const saved = {};
+
+    for (const row of rows) {
+      saved[row.key] = String(row.value == null ? '' : row.value).trim();
+    }
+
+    const leanRaw = saved.ui_theater_lean !== undefined
+      ? saved.ui_theater_lean
+      : saved.theater_lean;
+    const limitRaw = saved.ui_theater_context_limit !== undefined
+      ? saved.ui_theater_context_limit
+      : saved.theater_context_limit;
+    const limit = Number(limitRaw);
+
+    return {
+      lean: leanRaw === '0' || leanRaw === '1' ? leanRaw : '1',
+      contextLimit: THEATER_CONTEXT_LIMITS.indexOf(limit) >= 0
+        ? limit
+        : THEATER_CONTEXT_DEFAULT
+    };
+  }
+
+  // 哪些历史条目算「剧情」：选项（options）不进提示词，插画（narrator）本来
+  // 就只截 200 字、也不占「最近 8 条」的名额，只压缩真正的长剧情。
+  function historyToPrompt(row) {
+    return row.role === 'user' ||
+      row.role === 'narration' ||
+      row.role === 'character' ||
+      row.role === 'dice';
+  }
+
+  // 老剧情只留开头 160 字（够模型知道发生过什么），尾巴用「…（略）」标出来
+  function leanHistoryContent(content) {
+    const text = String(content == null ? '' : content);
+
+    if (text.length <= LEAN_OLD_CONTENT_CHARS) return text;
+
+    return text.slice(0, LEAN_OLD_CONTENT_CHARS) + '…（略）';
+  }
+
+  // 世界书按总字数封顶，截断时补省略号
+  function trimWorldbook(text, maxChars) {
+    const value = String(text == null ? '' : text);
+
+    if (value.length <= maxChars) return value;
+
+    return value.slice(0, maxChars) + '…';
   }
 
   function buildChatUrl(baseUrl) {
@@ -185,6 +256,26 @@ module.exports = function (app, db) {
     `).all(sessionId, Number(limit) || 10).reverse();
   }
 
+  // 兜底：模型怎么都写不出描述时，直接拿最近几段剧情的文字拼一段当描述。
+  // 剧情本身就是画面描写，够模型画一张了，总比直接报错让她画不成强。
+  function fallbackImagePrompt(session) {
+    const rows = recentSceneRows(session.id, 8);
+
+    const parts = rows.map((row) => {
+      if (row.role === 'dice') return '';
+      if (row.role === 'narrator') return '';
+      return String(row.content || '')
+        .replace(/\s+/g, ' ')
+        .replace(/[「」“”"]/g, '')
+        .trim();
+    }).filter((line) => line.length >= 8);
+
+    if (!parts.length) return '';
+
+    const text = parts.slice(-3).join('；');
+    return text.slice(0, 300);
+  }
+
   // 让文本模型根据最近剧情写一句画面描述（不是台词，是画面）
   async function writeImagePrompt(session, script, history) {
     const rows = Array.isArray(history) && history.length
@@ -242,8 +333,9 @@ module.exports = function (app, db) {
       system,
       user,
       temperature: 0.9,
-      maxTokens: 400,
-      timeoutMs: 60000
+      maxTokens: 800,
+      timeoutMs: 60000,
+      usageSource: 'image_prompt'
     });
 
     const prompt = cleanImagePrompt(result.content);
@@ -267,16 +359,22 @@ module.exports = function (app, db) {
     return text.slice(0, 300);
   }
 
-  // 服务端内部调 /api/generate-image：复用它的模型选择、参考图和 base64 落盘逻辑
-  async function requestTheaterImage(payload) {
+  // 服务端内部调 /api/generate-image：复用它的模型选择、参考图和 base64 落盘逻辑。
+  // 这是打自己进程的 HTTP 请求，会再过一遍登录守卫，所以要把当前用户的 cookie 带上，
+  // 不然内部请求拿到的是 401「未登录」。
+  async function requestTheaterImage(payload, cookie) {
     const url = 'http://127.0.0.1:' + localPort() + '/api/generate-image';
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 240000);
 
+    const headers = { 'Content-Type': 'application/json' };
+
+    if (cookie) headers.Cookie = cookie;
+
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(payload),
         signal: controller.signal
       });
@@ -325,7 +423,7 @@ module.exports = function (app, db) {
       String(session.identity_role || '') === '上帝视角'
         ? '视角：上帝视角，用户不扮演角色，只是旁观并替主角选下一步；选项要写成第三人称主角能做的事。'
         : '用户身份：' + session.identity_name + '，' + session.identity_role,
-      worldbook.text ? '【世界书】\n' + worldbook.text : '',
+      worldbook.text ? '【世界书】\n' + trimWorldbook(worldbook.text, WORLDBOOK_MAX_CHARS) : '',
       calendar || '',
       '',
       '最近剧情：',
@@ -341,8 +439,10 @@ module.exports = function (app, db) {
           system: prompt,
           user: '请生成 4 个下一步选项。',
           temperature: 0.9,
-          maxTokens: 1200,
-          timeoutMs: 60000
+          // 选项就四行短句，不用给 1200；省下的都是钱
+          maxTokens: 400,
+          timeoutMs: 60000,
+          usageSource: 'theater'
         });
 
         const options = parseOptionLines(result.content)
@@ -379,6 +479,7 @@ module.exports = function (app, db) {
 
     const modelRow = db.prepare(`
       SELECT * FROM model_profiles
+      WHERE is_image = 0
       ORDER BY is_default DESC, id DESC
       LIMIT 1
     `).get();
@@ -510,6 +611,7 @@ module.exports = function (app, db) {
     // 否则没配模型时会把这句话白白留在剧情里
     const modelRow = db.prepare(`
       SELECT * FROM model_profiles
+      WHERE is_image = 0
       ORDER BY is_default DESC, id DESC
       LIMIT 1
     `).get();
@@ -535,7 +637,8 @@ module.exports = function (app, db) {
       `).get(id))
       .filter(Boolean);
 
-    const castText = cast.map((item) => {
+    // 角色卡只带摘要：每个角色 120 字、最多 8 个，多出来的写一行「（其余角色略）」
+    const castTextParts = cast.slice(0, CAST_MAX_COUNT).map((item) => {
       const parts = [
         `角色名：${item.name}`,
         item.handle ? `用户名：${item.handle}` : '',
@@ -544,8 +647,16 @@ module.exports = function (app, db) {
         item.speaking_style ? `说话方式：${item.speaking_style}` : '',
         item.persona ? `完整人设：${item.persona}` : ''
       ].filter(Boolean);
-      return parts.join('\n');
-    }).join('\n\n');
+      const text = parts.join('\n');
+
+      return text.length > CAST_MAX_CHARS ? text.slice(0, CAST_MAX_CHARS) + '…' : text;
+    });
+
+    if (cast.length > CAST_MAX_COUNT) {
+      castTextParts.push('（其余角色略）');
+    }
+
+    const castText = castTextParts.join('\n\n');
 
     const corrections = db.prepare(`
       SELECT content FROM theater_corrections
@@ -558,12 +669,14 @@ module.exports = function (app, db) {
       ? corrections.map((item, index) => `${index + 1}. ${item.content}`).join('\n')
       : '无';
 
+    const costSettings = readTheaterCostSettings();
+
     const history = db.prepare(`
       SELECT role, content, image_url FROM theater_messages
       WHERE session_id = ?
       ORDER BY id DESC
-      LIMIT 40
-    `).all(session.id).reverse();
+      LIMIT ?
+    `).all(session.id, costSettings.contextLimit).reverse();
 
     const worldbook = getWorldbookContext(
       Number(script.world_id || getActiveWorldId()),
@@ -615,7 +728,7 @@ module.exports = function (app, db) {
       `参演角色：\n${castText || '无'}`,
       '',
       `持续修正规则：\n${correctionText}`,
-      worldbook.text ? `【世界书】\n${worldbook.text}` : '',
+      worldbook.text ? `【世界书】\n${trimWorldbook(worldbook.text, WORLDBOOK_MAX_CHARS)}` : '',
       calendar ? calendar : '',
       '',
       direction ? `用户希望的剧情走向（参考用，不要直接照抄，也不要说破）：\n${direction}` : '',
@@ -635,23 +748,41 @@ module.exports = function (app, db) {
       { role: 'system', content: systemPrompt }
     ];
 
-    history.forEach((row) => {
+    // 精简模式下：最近 8 条剧情原样，更早的只留开头 160 字。
+    // 选项（options）本来就不进提示词，所以不占这 8 个名额。
+    const leanOn = costSettings.lean === '1';
+    const promptRowIndexes = [];
+
+    history.forEach((row, index) => {
+      if (historyToPrompt(row)) promptRowIndexes.push(index);
+    });
+
+    const olderCount = Math.max(0, promptRowIndexes.length - LEAN_KEEP_RECENT);
+    const oldRowIndexes = new Set(
+      leanOn ? promptRowIndexes.slice(0, olderCount) : []
+    );
+
+    history.forEach((row, index) => {
+      const content = oldRowIndexes.has(index)
+        ? leanHistoryContent(row.content)
+        : row.content;
+
       if (row.role === 'user') {
-        messages.push({ role: 'user', content: row.content });
+        messages.push({ role: 'user', content });
       } else if (row.role === 'narration' || row.role === 'character') {
         // 历史里的旁白补回【旁白】标记，让模型照着格式学，
         // 不然它会以为上一轮就是纯散文，自己也只写散文、不给选项。
         messages.push({
           role: 'assistant',
-          content: '【旁白】\n' + row.content
+          content: '【旁白】\n' + content
         });
       } else if (row.role === 'dice') {
-        messages.push({ role: 'system', content: '[投掷结果] ' + row.content });
+        messages.push({ role: 'system', content: '[投掷结果] ' + content });
       } else if (row.role === 'narrator') {
         // 之前生成的插画只作为画面参考，不进正文
         messages.push({
           role: 'system',
-          content: '[本段插画] ' + String(row.content || '').slice(0, 200)
+          content: '[本段插画] ' + String(content || '').slice(0, 200)
         });
       }
     });
@@ -662,58 +793,25 @@ module.exports = function (app, db) {
       content: '格式提醒：本次回复必须包含【旁白】和【选项】两部分，【选项】下面必须有 A/B/C/D 四行，不能省略标记。'
     });
 
-    const extraHeaders = safeJsonParse(modelRow.extra_headers, {});
-    const headers = {
-      'Content-Type': 'application/json',
-      ...extraHeaders
-    };
-
-    if (!headers.Authorization && !headers.authorization) {
-      headers.Authorization = 'Bearer ' + modelRow.api_key;
-    }
-
     const payload = {
       model: modelRow.model,
       messages,
       temperature: Number(modelRow.temperature ?? 0.8)
     };
 
-    payload.max_tokens = Math.max(Number(modelRow.max_tokens) || 0, 3000);
+    // 输出额度：不再无条件 3000。4 个选项写得完就行，
+    // 但也不能压到 1200 以下，不然长旁白会被截断。
+    const configuredTokens = Number(modelRow.max_tokens) || 0;
+    payload.max_tokens = Math.min(Math.max(configuredTokens, 1200), 2400);
 
     const started = Date.now();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90000);
 
     try {
-      const response = await fetch(buildChatUrl(modelRow.base_url), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-        signal: controller.signal
+      // 推理模型会把额度花在思考上、正文为空，requestChat 里会自动翻额度重试
+      const { content: rawReply, data } = await requestChat(modelRow, payload, {
+        timeoutMs: 90000,
+        usageSource: 'theater'
       });
-
-      const text = await response.text();
-
-      if (!response.ok) {
-        return res.status(502).json({ error: text.slice(0, 1200) });
-      }
-
-      let data = null;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {}
-
-      const rawReply = String(
-        data?.choices?.[0]?.message?.content || ''
-      ).trim();
-
-      console.log('=== THEATER RAW REPLY ===');
-      console.log(rawReply);
-      console.log('=== END THEATER RAW ===');
-
-      if (!rawReply) {
-        return res.status(502).json({ error: '模型返回了空内容' });
-      }
 
       const parsed = parseTheaterJson(rawReply);
 
@@ -794,11 +892,10 @@ module.exports = function (app, db) {
           .get(Number(optionsResult.lastInsertRowid))
       });
     } catch (error) {
-      res.status(500).json({
+      // requestChat 已经把人话写进 message 了，这里原样带出去
+      res.status(error.status || 500).json({
         error: error.name === 'AbortError' ? '剧场生成超时' : error.message
       });
-    } finally {
-      clearTimeout(timer);
     }
   });
   // 给当前这一幕生成一张插画，作为一条带图消息进对话流
@@ -853,9 +950,18 @@ module.exports = function (app, db) {
         prompt = await writeImagePrompt(session, script);
         autoPrompted = true;
       } catch (error) {
-        return res.status(502).json({
-          error: '自动写画面描述失败：' + error.message
-        });
+        console.error('[剧场生图] 自动写描述失败，改用剧情原文兜底：' + (error && error.message));
+
+        const fallback = fallbackImagePrompt(session);
+
+        if (!fallback) {
+          return res.status(error.status || 502).json({
+            error: '自动写画面描述失败：' + error.message + '；你也可以自己写一句描述再生成'
+          });
+        }
+
+        prompt = fallback;
+        autoPrompted = true;
       }
     }
 
@@ -875,7 +981,7 @@ module.exports = function (app, db) {
         size,
         character_id: characterId || undefined,
         model_id: Number(body.model_id || 0) || undefined
-      });
+      }, req.headers.cookie);
     } catch (error) {
       return res.status(502).json({ error: error.message });
     }

@@ -1,37 +1,15 @@
 module.exports = function (app, db) {
-  function addColumnIfMissing(table, column, definition) {
-    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-    if (!cols.some((item) => item.name === column)) {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-    }
-  }
+  // messages 的补列（narration / image_url / image_desc / sticker_id）和
+  // message_variants 表统一在 schema.js + migrate.js 里建。以前写在这里，
+  // 模块加载时还没有账号上下文，ALTER 全落到 system.db 上，新账号反而缺列。
 
-  addColumnIfMissing('messages', 'narration', "TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('messages', 'image_url', "TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('messages', 'image_desc', "TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('message_variants', 'narration', "TEXT NOT NULL DEFAULT ''");
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS message_variants (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      message_id INTEGER NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      meta_json TEXT NOT NULL DEFAULT '',
-      sticker_id INTEGER,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  const messageColumns = db.prepare('PRAGMA table_info(messages)').all();
-
-  if (!messageColumns.some((item) => item.name === 'sticker_id')) {
-    db.exec('ALTER TABLE messages ADD COLUMN sticker_id INTEGER');
-  }
 
   const { getActiveWorldId } = require('./worlds');
 const { getWorldbookContext, getWorldbookContextByNames } = require('./worldbook');
 const { getCalendarContext } = require('./calendar-context');
-const { describeImage } = require('./llm');
+const {
+  describeImage, requestChat, parseJsonLoose, stripCodeFence, extractContent, recordUsage
+} = require('./llm');
 
   const DEFAULT_CHAT_STYLE = `【全局聊天风格】
 你是在用手机和用户聊天，不是在写小说。
@@ -81,6 +59,33 @@ const { describeImage } = require('./llm');
     `).get();
 
     return (row && row.value) || DEFAULT_CHAT_STYLE;
+  }
+
+  // 省 token 的两个开关：lean_mode='1' 跳过补问旁白的那次请求；
+  // context_limit 决定发多少条历史（库里的脏值按 40 兜底）。
+  const CONTEXT_LIMIT_MAX = 40;
+
+  function readLeanSettings() {
+    const rows = db.prepare(`
+      SELECT key, value FROM app_settings
+      WHERE key IN ('ui_lean_mode', 'ui_context_limit')
+    `).all();
+
+    const saved = {};
+
+    for (const row of rows) {
+      saved[row.key] = String(row.value == null ? '' : row.value).trim();
+    }
+
+    const limit = Number(saved.ui_context_limit);
+    const contextLimit = Number.isInteger(limit) && limit >= 1 && limit <= CONTEXT_LIMIT_MAX
+      ? limit
+      : CONTEXT_LIMIT_MAX;
+
+    return {
+      leanMode: saved.ui_lean_mode === '1' ? '1' : '0',
+      contextLimit
+    };
   }
 
   app.get('/api/chats', (req, res) => {
@@ -530,6 +535,7 @@ const { describeImage } = require('./llm');
 
     const modelRow = db.prepare(`
       SELECT * FROM model_profiles
+      WHERE is_image = 0
       ORDER BY is_default DESC, id DESC
       LIMIT 1
     `).get();
@@ -553,6 +559,8 @@ const { describeImage } = require('./llm');
       `).get();
     }
 
+    const { leanMode, contextLimit } = readLeanSettings();
+
     const history = regenerateId
       ? db.prepare(`
           SELECT
@@ -562,8 +570,8 @@ const { describeImage } = require('./llm');
           LEFT JOIN stickers s ON s.id = m.sticker_id
           WHERE m.character_id = ? AND m.id < ?
           ORDER BY m.id DESC
-          LIMIT 40
-        `).all(req.params.id, regenerateId).reverse()
+          LIMIT ?
+        `).all(req.params.id, regenerateId, contextLimit).reverse()
       : db.prepare(`
           SELECT
             m.id, m.role, m.content, m.narration, m.image_url, m.image_desc,
@@ -572,8 +580,8 @@ const { describeImage } = require('./llm');
           LEFT JOIN stickers s ON s.id = m.sticker_id
           WHERE m.character_id = ?
           ORDER BY m.id DESC
-          LIMIT 40
-        `).all(req.params.id).reverse();
+          LIMIT ?
+        `).all(req.params.id, contextLimit).reverse();
 
     const worldId = Number(character.world_id || getActiveWorldId());
     // 把角色名和用户人设名一起作为检索词，
@@ -694,7 +702,91 @@ const { describeImage } = require('./llm');
     const candidates = [];
     const baseTemperature = Number(modelRow.temperature ?? 0.8);
 
+    const pushCandidate = (parsed, meta) => {
+      const variantResult = db.prepare(`
+        INSERT INTO message_variants
+          (message_id, content, narration, meta_json, sticker_id)
+        VALUES (?, ?, ?, ?, NULL)
+      `).run(
+        targetMessage.id,
+        parsed.dialogue,
+        parsed.narration,
+        JSON.stringify(meta)
+      );
+
+      candidates.push({
+        variant_id: Number(variantResult.lastInsertRowid),
+        content: parsed.dialogue,
+        narration: parsed.narration
+      });
+    };
+
+    const makeMeta = (data, elapsed) => ({
+      provider: modelRow.name,
+      model: modelRow.model,
+      usage: data && data.usage ? data.usage : null,
+      latency_ms: elapsed,
+      context_messages: history.length,
+      worldbook_hits: worldbook.count
+    });
+
     try {
+      // 省 token：重新生成 3 条候选时先一次请求要 n 份。
+      // 同一段历史发 3 遍很贵，能一次拿回来就省掉两次重复输入。
+      if (candidateCount > 1) {
+        const multiStarted = Date.now();
+        let fallbackReason = '';
+        let multiChoices = [];
+        let multiData = null;
+
+        try {
+          const multiPayload = {
+            ...payload,
+            // n 路径只用基础温度，不跟逐次生成那套加温错开
+            temperature: baseTemperature,
+            n: candidateCount
+          };
+
+          // 很多兼容站不认 n，会直接 400；requestChat 会包成 502 抛出来，这里接住退回
+          const result = await requestChat(modelRow, multiPayload, {
+            timeoutMs: 60000,
+            usageSource: 'regenerate',
+            character
+          });
+
+          multiData = result.data;
+
+          const choices = Array.isArray(multiData && multiData.choices)
+            ? multiData.choices
+            : [];
+
+          multiChoices = choices
+            .map((choice) => parseChatReply(
+              extractContent((choice && choice.message) || {}, choice || {}).trim()
+            ))
+            .filter((parsed) => parsed.dialogue || parsed.narration);
+
+          if (multiChoices.length < candidateCount) {
+            fallbackReason =
+              '上游只回了 ' + multiChoices.length + '/' + candidateCount + ' 份';
+          }
+        } catch (error) {
+          fallbackReason = (error && (error.message || error.name)) || '请求失败';
+        }
+
+        if (!fallbackReason) {
+          const meta = makeMeta(multiData, Date.now() - multiStarted);
+
+          for (const parsed of multiChoices) {
+            pushCandidate(parsed, meta);
+          }
+
+          return res.json({ ok: true, candidates });
+        }
+
+        console.log('[省token] 上游不支持 n，退回逐次生成：' + fallbackReason);
+      }
+
       for (let attempt = 0; attempt < candidateCount; attempt += 1) {
         // 一次生成多份时把温度错开，免得三份一模一样
         payload.temperature = candidateCount > 1
@@ -702,52 +794,20 @@ const { describeImage } = require('./llm');
           : baseTemperature;
 
         const attemptStarted = Date.now();
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 60000);
 
-        let text = '';
-
-        try {
-          const response = await fetch(buildChatUrl(modelRow.base_url), {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(payload),
-            signal: controller.signal
-          });
-
-          text = await response.text();
-
-          if (!response.ok) {
-            const modelError = new Error(text.slice(0, 1000));
-            modelError.status = 502;
-            throw modelError;
-          }
-        } finally {
-          clearTimeout(timer);
-        }
-
-        let data = null;
-
-        try {
-          data = JSON.parse(text);
-        } catch (e) {}
-
-        const rawReply = String(
-          data && data.choices && data.choices[0] &&
-          data.choices[0].message && data.choices[0].message.content || ''
-        ).trim();
-
-        if (!rawReply) {
-          const emptyError = new Error('模型返回了空内容');
-          emptyError.status = 502;
-          throw emptyError;
-        }
+        // requestChat 里已处理：推理模型把额度花在思考上、正文为空时自动重试；
+        // 返回非 2xx 会抛出带 status=502 的错误，直接交给外层 catch。
+        const { data, content: rawReply } = await requestChat(modelRow, payload, {
+          timeoutMs: 60000,
+          usageSource: candidateCount > 1 ? 'regenerate' : 'chat',
+          character
+        });
 
         let parsedReply = parseChatReply(rawReply);
 
         // 提示词里写死了要旁白，模型还是经常偷懒只回台词。
         // 这种时候补问一次，明确点名要动作/神态，比改提示词管用。
-        if (!parsedReply.narration && candidateCount === 1) {
+        if (!parsedReply.narration && candidateCount === 1 && leanMode !== '1') {
           try {
             const nudgePayload = {
               ...payload,
@@ -780,6 +840,9 @@ const { describeImage } = require('./llm');
             }
 
             const nudgeData = JSON.parse(nudgeText);
+
+            recordUsage(payload, nudgeData, { usageSource: 'chat', character });
+
             const nudgeRaw = String(
               nudgeData && nudgeData.choices && nudgeData.choices[0] &&
               nudgeData.choices[0].message && nudgeData.choices[0].message.content || ''
@@ -794,6 +857,10 @@ const { describeImage } = require('./llm');
           } catch (e) {
             // 补问失败就用原来那条，不影响这次回复
           }
+        }
+
+        if (!parsedReply.narration && candidateCount === 1 && leanMode === '1') {
+          console.log('[省token] 省 token 模式：这条缺旁白，跳过补问请求');
         }
 
         const dialogue = parsedReply.dialogue;
@@ -816,23 +883,7 @@ const { describeImage } = require('./llm');
 
         // 预览模式（一次要 2~3 份）：先存成历史版本，不动当前正文
         if (candidateCount > 1) {
-          const variantResult = db.prepare(`
-            INSERT INTO message_variants
-              (message_id, content, narration, meta_json, sticker_id)
-            VALUES (?, ?, ?, ?, NULL)
-          `).run(
-            targetMessage.id,
-            dialogue,
-            narration,
-            JSON.stringify(meta)
-          );
-
-          candidates.push({
-            variant_id: Number(variantResult.lastInsertRowid),
-            content: dialogue,
-            narration
-          });
-
+          pushCandidate({ dialogue, narration }, meta);
           continue;
         }
 
@@ -913,6 +964,203 @@ const { describeImage } = require('./llm');
     } catch (error) {
       res.status(error.status || 500).json({
         error: error.name === 'AbortError' ? '模型请求超时' : error.message
+      });
+    }
+  });
+
+  // 把模型给的回复建议解析成字符串数组：优先 JSON 数组，退化成按行切
+  function parseSuggestions(content, limit) {
+    const raw = String(content || '').trim();
+    const picked = [];
+
+    const push = (value) => {
+      let text = String(value == null ? '' : value)
+        .replace(/^[\s\-*•·[\]()]+/, '')
+        .replace(/^\d+[.、)]\s*/, '')
+        .replace(/^["“”'‘’]+/, '')
+        .replace(/["“”'‘’\s]+$/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!text) return;
+      if (text.length > 240) text = text.slice(0, 240);
+
+      if (!picked.includes(text)) picked.push(text);
+    };
+
+    let parsed = parseJsonLoose(raw);
+
+    // 模型有时会先来一句「这是几条建议：」，parseJsonLoose 只认对象，这里再按数组捞一次
+    if (!parsed) {
+      const start = raw.indexOf('[');
+      const end = raw.lastIndexOf(']');
+
+      if (start >= 0 && end > start) {
+        try {
+          parsed = JSON.parse(raw.slice(start, end + 1));
+        } catch (e) {}
+      }
+    }
+
+    if (Array.isArray(parsed)) {
+      parsed.forEach(push);
+    } else if (parsed && typeof parsed === 'object') {
+      const list = parsed.suggestions || parsed.replies || parsed.items || parsed.list;
+
+      if (Array.isArray(list)) list.forEach(push);
+      else if (typeof parsed.text === 'string') push(parsed.text);
+    }
+
+    if (!picked.length) {
+      // 不是标准 JSON 就按行切，顺便跳过模型爱加的开场白
+      for (const line of stripCodeFence(raw).split(/\n+/)) {
+        const text = line.trim();
+
+        if (!text) continue;
+        if (/^(好的|当然|没问题|以下是|下面是|建议)[，,：:]?$/.test(text)) continue;
+
+        push(text);
+      }
+    }
+
+    return picked.slice(0, limit);
+  }
+
+  // 聊天「帮我想几句」：按当前剧情/角色设定，替用户想几条可以直接发出去的话
+  app.post('/api/characters/:id/suggest-replies', async (req, res) => {
+    const character = db.prepare('SELECT * FROM characters WHERE id = ?')
+      .get(req.params.id);
+
+    if (!character) {
+      return res.status(404).json({ error: '角色不存在' });
+    }
+
+    const modelRow = db.prepare(`
+      SELECT * FROM model_profiles
+      WHERE is_image = 0
+      ORDER BY is_default DESC, id DESC
+      LIMIT 1
+    `).get();
+
+    if (!modelRow) {
+      return res.status(400).json({
+        error: '还没有配置文本模型，先去「模型 API」里加一个'
+      });
+    }
+
+    const recent = db.prepare(`
+      SELECT role, content, narration FROM messages
+      WHERE character_id = ?
+      ORDER BY id DESC
+      LIMIT 12
+    `).all(req.params.id).reverse();
+
+    if (!recent.length) {
+      return res.status(400).json({
+        error: '还没有聊天记录，先随便说一句再来'
+      });
+    }
+
+    const body = req.body || {};
+    const count = Math.min(Math.max(Number(body.count) || 3, 1), 5);
+
+    let userPersona = null;
+
+    if (Number(character.user_persona_id || 0) > 0) {
+      userPersona = db.prepare('SELECT * FROM user_personas WHERE id = ?')
+        .get(character.user_persona_id);
+    }
+
+    if (!userPersona) {
+      userPersona = db.prepare(`
+        SELECT * FROM user_personas
+        WHERE is_default = 1
+        ORDER BY id ASC
+        LIMIT 1
+      `).get();
+    }
+
+    const transcript = recent.map((row) => {
+      const who = row.role === 'user' ? '我' : character.name;
+      const text = String(row.content || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+      const narration = String(row.narration || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+
+      // 纯图片/纯旁白的气泡 content 可能是空的，别把它拼成「我：」
+      if (!text) return narration ? '（旁白）' + narration : '';
+
+      const line = who + '：' + text;
+
+      return narration ? line + '（旁白：' + narration + '）' : line;
+    }).filter(Boolean).join('\n');
+
+    const characterCard = [
+      '角色名：' + character.name,
+      character.personality ? '性格：' + character.personality : '',
+      character.speaking_style ? '说话风格：' + character.speaking_style : '',
+      character.persona ? '人设：' + character.persona.slice(0, 600) : ''
+    ].filter(Boolean).join('\n');
+
+    const personaLine = userPersona
+      ? '我（用户）的人设：' + userPersona.name +
+        (userPersona.bio ? '，' + userPersona.bio : '') +
+        (userPersona.persona ? '\n' + userPersona.persona.slice(0, 400) : '')
+      : '';
+
+    const messages = [
+      {
+        role: 'system',
+        content: [
+          '你在帮用户想接下来可以发出去的消息。',
+          '用户正在和「' + character.name + '」聊天，你要站在用户自己的角度，写几条用户真的会发出去的话。',
+          '要求：',
+          '1. 每条 1~2 句，口语化，像微信聊天，不要书面语；',
+          '2. 各条的切入角度要不一样（比如一条顺着聊、一条好奇追问、一条带点玩笑或小情绪）；',
+          '3. 只写用户会说的话，不要写角色会说的话，不要加旁白、动作描写、引号或编号；',
+          '4. 只输出 JSON 字符串数组，例如 ["……","……","……"]，不要输出任何解释。'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: [
+          characterCard,
+          personaLine,
+          '最近对话：\n' + transcript,
+          '请给 ' + count + ' 条建议。'
+        ].filter(Boolean).join('\n\n')
+      }
+    ];
+
+    const payload = {
+      model: modelRow.model,
+      messages,
+      temperature: Math.min(1.2, Math.max(0.7, Number(modelRow.temperature ?? 0.85))),
+      max_tokens: Math.min(Math.max(Number(modelRow.max_tokens) || 700, 400), 900)
+    };
+
+    try {
+      const { content } = await requestChat(modelRow, payload, {
+        timeoutMs: 30000,
+        usageSource: 'suggest',
+        character
+      });
+      const suggestions = parseSuggestions(content, count);
+
+      if (!suggestions.length) {
+        return res.status(502).json({ error: '模型没写出建议，再试一次' });
+      }
+
+      res.json({ suggestions });
+    } catch (error) {
+      // requestChat 已经把超时包成 504、上游/网络错误包成 502，这里原样透出，不吞成 500。
+      // 模型「只思考不写正文 / 返回空」这类没有状态码的，按契约统一成「没写出建议」。
+      if (!error.status) {
+        console.error('[建议回复] 出错了：', error);
+
+        return res.status(502).json({ error: '模型没写出建议，再试一次' });
+      }
+
+      res.status(Number(error.status)).json({
+        error: error.message || '生成建议失败，再试一次'
       });
     }
   });

@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -26,13 +27,26 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      # ubuntu 镜像里其实已经带了 android-34、build-tools 34、NDK 26.1 和 cmake 3.22.1，
+      # 以前每次都重新下一个七百多兆的 NDK，慢的时候能卡半小时。现在只补缺的。
       - name: 装 Android SDK 组件
+        timeout-minutes: 15
         run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
-            "ndk;26.1.10909125" "cmake;3.22.1"
+          SDK="$ANDROID_HOME"
+          need=""
+          [ -d "$SDK/platforms/android-34" ] || need="$need platforms;android-34"
+          [ -d "$SDK/build-tools/34.0.0" ] || need="$need build-tools;34.0.0"
+          [ -d "$SDK/ndk/26.1.10909125" ] || need="$need ndk;26.1.10909125"
+          [ -d "$SDK/cmake/3.22.1" ] || need="$need cmake;3.22.1"
+          echo "镜像自带的 NDK："; ls "$SDK/ndk" || true
+          echo "镜像自带的 cmake："; ls "$SDK/cmake" || true
+          if [ -z "$need" ]; then
+            echo "需要的组件都在，跳过下载"
+            exit 0
+          fi
+          echo "缺这几样，开始装：$need"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" $need
 
       - name: 下载 libnode（Node 18 for Android）
         run: |
@@ -60,14 +74,47 @@ jobs:
       - name: 语法检查
         run: npm run check
 
+      - name: 准备签名密钥
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ROLEPHONE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ROLEPHONE_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "没有配置签名密钥，这次只出 debug 包"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+          echo "密钥文件 $(wc -c < android/app/release.keystore) 字节"
+          keytool -list \
+            -keystore android/app/release.keystore \
+            -storetype PKCS12 \
+            -storepass "$KEYSTORE_PASSWORD" | head -12
+          {
+            echo "ROLEPHONE_KEYSTORE=release.keystore"
+            echo "ROLEPHONE_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "ROLEPHONE_KEY_ALIAS=${{ secrets.ROLEPHONE_KEY_ALIAS }}"
+            echo "ROLEPHONE_KEY_PASSWORD=${{ secrets.ROLEPHONE_KEY_PASSWORD }}"
+          } >> "$GITHUB_ENV"
+
       - name: 打包 APK
         working-directory: android
         run: gradle assembleDebug --no-daemon --stacktrace
 
+      - name: 打包 release APK（配了密钥才有）
+        if: env.ROLEPHONE_KEYSTORE_PASSWORD != ''
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+
       - name: 收集产物
         run: |
           mkdir -p out
-          find android/app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          # 有 release 包就只放 release（正式密钥签名，能覆盖安装）
+          # debug 包签名不同，装到旧版本上会「应用未安装」，别混进去
+          if [ -f android/app/build/outputs/apk/release/app-release.apk ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk out/app-release.apk
+          else
+            find android/app/build/outputs/apk/debug -name '*.apk' -exec cp {} out/app-debug.apk \;
+          fi
           ls -la out/
 
       - uses: actions/upload-artifact@v4
@@ -81,8 +128,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="apk-$(date +%Y%m%d-%H%M)"
+          # 版本号和更新公告都从 package.json / CHANGELOG 取，App 里的「检查更新」直接读这份正文
+          VER=$(node -p "require('./package.json').version")
+          node -e "
+            const fs = require('fs');
+            const ver = process.argv[1];
+            const text = fs.readFileSync('CHANGELOG.md', 'utf8');
+            const start = text.indexOf('## [' + ver + ']');
+            let body = '有新版本可以更新。';
+            if (start >= 0) {
+              const rest = text.slice(start);
+              const end = rest.indexOf('\n## [', 5);
+              body = (end > 0 ? rest.slice(0, end) : rest).trim();
+            }
+            fs.writeFileSync('notes.md', '版本 ' + ver + '\n\n' + body + '\n');
+          " "$VER"
           gh release create "$TAG" out/*.apk \
             --repo "$GITHUB_REPOSITORY" \
-            --title "APK $TAG" \
-            --notes "GitHub Actions 自动构建的调试版安装包（debug 签名，可直接安装）。" \
+            --title "Nocturne $VER" \
+            --notes-file notes.md \
             --latest

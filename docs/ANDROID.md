@@ -88,3 +88,23 @@ express 5 依赖的 `path-to-regexp@8` 第 11 行就用了它，结果就是服�
 **启动失败要看得到日志。** `main.js` 会把所有 `console.*` 输出追加到
 `files/nodejs-project/boot.log`，`MainActivity` 在重试 60 次（约 30 秒）还没起来时，
 会把这个文件渲染成一个页面显示出来，直接截图就能定位。
+
+## release 签名
+
+debug 包的签名是 Android 的公共调试密钥，谁都能用同一把签出同名包。想长期分发，
+放进 GitHub Secrets 走正式签名，流水线会自动多出一个 `app-release.apk`：
+
+| Secret | 内容 |
+| --- | --- |
+| `ROLEPHONE_KEYSTORE_BASE64` | keystore 文件的 base64（PKCS12） |
+| `ROLEPHONE_KEYSTORE_PASSWORD` | keystore 密码 |
+| `ROLEPHONE_KEY_ALIAS` | 密钥别名 |
+| `ROLEPHONE_KEY_PASSWORD` | 密钥密码 |
+
+没配这些 secret 时流水线只出 debug 包，不会失败。
+
+换成 release 签名后，覆盖安装会失败（签名不同），得先卸载旧包——所以升级前
+先在旧版本里备份一次。
+
+**密钥丢了就再也签不出同一个应用**，系统会认为新包是另一个应用。keystore 和密码
+请另存一份，别只放在手机里。

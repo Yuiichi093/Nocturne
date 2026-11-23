@@ -16,6 +16,7 @@ function buildChatUrl(baseUrl) {
 function getDefaultModel() {
   return db.prepare(`
     SELECT * FROM model_profiles
+    WHERE is_image = 0
     ORDER BY is_default DESC, id DESC
     LIMIT 1
   `).get();
@@ -55,14 +56,26 @@ function parseJsonLoose(text) {
   return null;
 }
 
-async function callModel(options) {
-  const opts = options || {};
-  const modelRow = opts.modelRow || getDefaultModel();
+// 不同服务商的返回长得不太一样：content 可能是字符串，也可能是
+// [{type:'text', text:'…'}] 这种数组；有些老接口直接给 text 字段。
+function extractContent(message, choice) {
+  const raw = message.content ?? choice.text ?? '';
 
-  if (!modelRow) {
-    throw new Error('还没有配置模型 API');
+  if (Array.isArray(raw)) {
+    return raw
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part.text === 'string') return part.text;
+        if (part && typeof part.content === 'string') return part.content;
+        return '';
+      })
+      .join('');
   }
 
+  return String(raw || '');
+}
+
+function buildChatHeaders(modelRow) {
   const headers = {
     'Content-Type': 'application/json',
     ...parseExtraHeaders(modelRow.extra_headers)
@@ -70,6 +83,280 @@ async function callModel(options) {
 
   if (!headers.Authorization && !headers.authorization) {
     headers.Authorization = 'Bearer ' + modelRow.api_key;
+  }
+
+  return headers;
+}
+
+function emptyContentError(choice, message, text) {
+  const reasoning = String(
+    message.reasoning_content || message.reasoning || ''
+  ).trim();
+  const finish = String(choice.finish_reason || '');
+
+  if (reasoning && finish === 'length') {
+    return new Error(
+      '模型把输出额度都用在思考上了，没写出正文。换一个非推理模型，' +
+      '或者在「模型设置」里把这个模型的输出上限调大一点'
+    );
+  }
+
+  if (reasoning) {
+    return new Error('模型只返回了思考过程，没给正文，再试一次或者换个模型');
+  }
+
+  if (!choice || (!choice.message && !choice.text)) {
+    return new Error('模型返回的格式看不懂：' + String(text).slice(0, 120));
+  }
+
+  return new Error('模型返回了空内容');
+}
+
+// 出错时把模型名也带出来，报错截图一看就知道是哪个模型不听话
+function withModelHint(error, modelRow) {
+  const name = modelRow && (modelRow.name || modelRow.model || modelRow.model_name);
+  if (!name || !error) return error;
+  const hinted = new Error(String(error.message) + '（模型：' + name + '）');
+  hinted.status = error.status;
+  return hinted;
+}
+
+// 把上游的原始报错（常常是一大坨 JSON）翻成人话。
+// 最常见的 401 就是 Key 填错/过期，用户看到「Authentication Fails」根本不知道怎么办。
+function upstreamErrorText(statusCode, raw) {
+  let detail = "";
+  let type = "";
+
+  try {
+    const parsed = JSON.parse(raw);
+    const inner = parsed && parsed.error && typeof parsed.error === "object" ? parsed.error : parsed;
+    detail = String(
+      (inner && (inner.message || inner.msg || inner.error)) || ""
+    ).trim();
+    type = String((inner && inner.type) || "").trim();
+  } catch (e) {
+    detail = String(raw || "").trim();
+  }
+
+  detail = detail.replace(/\s+/g, " ").slice(0, 180);
+
+  if (statusCode === 401 || statusCode === 403 || /authentication|invalid.*key|unauthor/i.test(detail)) {
+    return (
+      "API Key 不对或者已经过期了：请去「模型设置」里把这个模型的 Key 重新填一次" +
+      (detail ? "（接口说：" + detail + "）" : "")
+    );
+  }
+
+  // 402 / Insufficient Balance：平台那边欠费了，跟 Key 对不对是两件事，要分开说
+  if (
+    statusCode === 402 ||
+    /insufficient.*(balance|quota|credit)|余额不足|quota exceeded|no credit/i.test(detail)
+  ) {
+    return (
+      "模型平台的余额不够了：去平台充值，或者在「模型设置」里换一个还有额度的 Key" +
+      (detail ? "（接口说：" + detail + "）" : "")
+    );
+  }
+
+  if (statusCode === 429) {
+    return "模型服务被限流了，等一分钟再试" + (detail ? "（接口说：" + detail + "）" : "");
+  }
+
+  if (statusCode === 404) {
+    return (
+      "接口地址或者模型名不对（404）：检查「模型设置」里的 Base URL 和模型名" +
+      (detail ? "（接口说：" + detail + "）" : "")
+    );
+  }
+
+  if (statusCode === 400) {
+    return (
+      "模型服务说这个请求不对（400）" +
+      (detail ? "：" + detail : "") +
+      "，常见原因是模型名不认识、参数不被支持，或者这个模型不支持图片"
+    );
+  }
+
+  if (statusCode >= 500) {
+    return (
+      "模型服务那边出错了（" + statusCode + "），不是手机上 App 的问题，过一会儿再试" +
+      (detail ? "（接口说：" + detail + "）" : "")
+    );
+  }
+
+  return "模型接口返回错误（" + statusCode + "）" + (detail ? "：" + detail : "");
+}
+
+/* ========== 用量账本 ========== */
+// 各家上游的 usage 字段名不太一样，能取到哪个算哪个，取不到就 0
+function pickTokens(usage, keys) {
+  if (!usage || typeof usage !== 'object') return 0;
+
+  for (const key of keys) {
+    const value = Number(usage[key]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+
+  return 0;
+}
+
+/**
+ * 记一笔用量。成功且上游给了 usage 才写行，没给就跳过（不写脏行）。
+ * 记账本身失败只打一行日志，绝不能让正在进行的请求失败。
+ */
+function recordUsage(payload, data, options) {
+  try {
+    const usage = data && data.usage;
+
+    if (!usage || typeof usage !== 'object') return false;
+
+    const opts = options || {};
+    const inputTokens = pickTokens(usage, ['prompt_tokens', 'input_tokens']);
+    const outputTokens = pickTokens(usage, ['completion_tokens', 'output_tokens']);
+    const cacheHitTokens =
+      pickTokens(usage, ['prompt_cache_hit_tokens', 'cache_read_input_tokens']) ||
+      pickTokens(usage.prompt_tokens_details, ['cached_tokens']);
+    const totalTokens =
+      pickTokens(usage, ['total_tokens']) || inputTokens + outputTokens;
+
+    const character = opts.character || {};
+    const characterId =
+      Number(character.id || (payload && payload.character_id) || 0) || 0;
+    const characterName = String(
+      character.name || (payload && payload.character_name) || ''
+    ).slice(0, 60);
+
+    // created_at 存本地时间：汇总按本地自然日切，和单条明细显示一致
+    db.prepare(`
+      INSERT INTO usage_logs
+        (created_at, source, model, input_tokens, output_tokens,
+         cache_hit_tokens, total_tokens, character_id, character_name)
+      VALUES (datetime('now','localtime'), ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      String(opts.usageSource || 'chat'),
+      String((payload && payload.model) || ''),
+      inputTokens,
+      outputTokens,
+      cacheHitTokens,
+      totalTokens,
+      characterId,
+      characterName
+    );
+
+    return true;
+  } catch (error) {
+    console.log('[用量账本] 记一笔失败：' +
+      (error && error.message ? error.message : String(error)));
+    return false;
+  }
+}
+
+/**
+ * 统一发一次 chat/completions，返回 { data, text, content, started }。
+ *
+ * 各调用方（聊天、剧场旁白、自动写画面描述）原来各写一份 fetch，
+ * 遇到推理模型把 max_tokens 花在思考上、正文为空时全都只会报「空内容」。
+ * 这里集中处理：正文空就把额度翻三倍重试（最多三次），还是空再报人话。
+ */
+async function requestChat(modelRow, payload, options) {
+  const opts = options || {};
+  const retries = opts.retries === undefined ? 2 : Number(opts.retries);
+  let maxTokens = Number(payload.max_tokens) || 400;
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const body = { ...payload, max_tokens: maxTokens };
+    const started = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      Number(opts.timeoutMs || 60000)
+    );
+    let text = '';
+
+    try {
+      const response = await fetch(buildChatUrl(modelRow.base_url), {
+        method: 'POST',
+        headers: buildChatHeaders(modelRow),
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+
+      text = await response.text();
+
+      if (!response.ok) {
+        const error = new Error(upstreamErrorText(response.status, text));
+        error.status = 502;
+        error.raw = text;
+        error.upstreamStatus = response.status;
+        throw error;
+      }
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        const timeout = new Error('模型调用超时，等一会儿再试');
+        timeout.status = 504;
+        throw timeout;
+      }
+
+      // 网络层直接挂掉（DNS、连不上、连接被重置）也归到「上游不可用」，
+      // 别让调用方把 500 当成自己的 bug
+      if (!error.status) {
+        const failed = new Error(
+          '连不上模型服务：' + (error.message || '网络错误')
+        );
+        failed.status = 502;
+        throw failed;
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    let data = null;
+
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error('模型返回的不是合法 JSON：' + String(text).slice(0, 120));
+    }
+
+    const choice = (data && data.choices && data.choices[0]) || {};
+    const message = choice.message || {};
+    const content = extractContent(message, choice).trim();
+
+    if (content) {
+      // 成功拿到正文才记账：失败/重试中的空回复不占账本
+      recordUsage(payload, data, options);
+
+      return { data, text, content, choice, started };
+    }
+
+    lastError = emptyContentError(choice, message, text);
+
+    const finish = String(choice.finish_reason || '');
+    const hasReasoning = Boolean(
+      message.reasoning_content || message.reasoning
+    );
+
+    // 额度被思考吃光：翻倍再来，正文通常就有了
+    if ((finish === 'length' || hasReasoning) && attempt < retries) {
+      maxTokens = Math.min(12000, Math.max(1200, maxTokens * 3));
+      continue;
+    }
+
+    throw withModelHint(lastError, modelRow);
+  }
+
+  throw withModelHint(lastError || new Error('模型返回了空内容'), modelRow);
+}
+
+async function callModel(options) {
+  const opts = options || {};
+  const modelRow = opts.modelRow || getDefaultModel();
+
+  if (!modelRow) {
+    throw new Error('还没有配置模型 API');
   }
 
   const payload = {
@@ -82,55 +369,21 @@ async function callModel(options) {
     max_tokens: Number(opts.maxTokens ?? 400)
   };
 
-  const started = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Number(opts.timeoutMs || 60000));
+  const result = await requestChat(modelRow, payload, {
+    timeoutMs: opts.timeoutMs,
+    usageSource: opts.usageSource,
+    character: opts.character
+  });
 
-  try {
-    const response = await fetch(buildChatUrl(modelRow.base_url), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-
-    const text = await response.text();
-
-    if (!response.ok) {
-      throw new Error('模型接口返回错误：' + text.slice(0, 500));
+  return {
+    content: result.content,
+    meta: {
+      provider: modelRow.name,
+      model: modelRow.model,
+      usage: (result.data && result.data.usage) || null,
+      latency_ms: Date.now() - result.started
     }
-
-    let data = null;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      throw new Error('模型返回的不是合法 JSON');
-    }
-
-    const content = String(data && data.choices && data.choices[0] &&
-      data.choices[0].message && data.choices[0].message.content || '').trim();
-
-    if (!content) {
-      throw new Error('模型返回了空内容');
-    }
-
-    return {
-      content,
-      meta: {
-        provider: modelRow.name,
-        model: modelRow.model,
-        usage: data.usage || null,
-        latency_ms: Date.now() - started
-      }
-    };
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new Error('模型调用超时');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  };
 }
 
 // ---- 看图（视觉模型） ----
@@ -167,7 +420,17 @@ function imageToDataUrl(imageUrl) {
 
   if (!clean.startsWith('/uploads/')) return '';
 
-  const file = path.join(__dirname, 'data', 'uploads', path.basename(clean));
+  // 图片按账号分开存，data/uploads 里已经没有东西了，得看当前请求是谁在看图
+  let baseDir;
+
+  try {
+    baseDir = db.uploadsDir();
+  } catch (e) {
+    // 取不到目录（不在请求上下文里）就当图片读不出来，让上层走原来的降级
+    return '';
+  }
+
+  const file = path.join(baseDir, path.basename(clean));
 
   try {
     if (!fs.existsSync(file)) return '';
@@ -347,6 +610,10 @@ async function describeImage(options) {
 
 module.exports = {
   callModel,
+  requestChat,
+  recordUsage,
+  buildChatHeaders,
+  extractContent,
   getVisionModel,
   describeImage,
   imageToDataUrl,

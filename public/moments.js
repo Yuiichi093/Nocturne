@@ -249,8 +249,18 @@
       avatar.textContent = String(user.name || '我').slice(0, 1);
     }
 
+    applyCover();
+  }
+
+  // 封面单独画，别等用户信息和动态都拿到才画
+  function applyCover() {
+    const cover = $('momentsCover');
+    if (!cover) return;
+
     if (coverUrl) {
-      $('momentsCover').style.backgroundImage = 'url("' + coverUrl + '")';
+      cover.style.backgroundImage = 'url("' + coverUrl + '")';
+    } else {
+      cover.style.backgroundImage = '';
     }
   }
 
@@ -378,36 +388,55 @@
     }).join('');
   }
 
+  // 每个请求单独兜底：以前是 Promise.all 一把抓，任何一个接口抽风
+  // （比如 /api/personas 返回 {error}）都会整段跳到 catch，
+  // renderHeader() 根本不执行，已经显示的封面就被卡住或者被弹回去。
+  function safeJson(url) {
+    return fetch(url)
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null);
+  }
+
   async function loadAll() {
-    try {
-      const [momentsRes, settingsRes, personasRes, activeRes, profileRes] = await Promise.all([
-        fetch('/api/moments'),
-        fetch('/api/moments/settings'),
-        fetch('/api/personas'),
-        fetch('/api/worlds/active'),
-        fetch('/api/profile')
-      ]);
+    // 谁先回来谁先画：封面、用户信息、动态互不等待。
+    // 以前是一把 Promise.all，任何一个接口慢或者报错，
+    // 整页就停在「我 / 写一句签名」的默认样子，看着像功能坏了。
+    const settingsReq = safeJson('/api/moments/settings');
+    const profileReq = safeJson('/api/profile');
+    const personasReq = safeJson('/api/personas');
+    const momentsReq = safeJson('/api/moments');
 
-      moments = await momentsRes.json();
-      const settings = await settingsRes.json();
-      const personas = await personasRes.json();
-      const activeWorld = await activeRes.json();
-
-      coverUrl = settings.cover || '';
-      userPersona = personas.find((item) => Number(item.is_default) === 1) ||
-        personas[0] ||
-        null;
-
-      localProfile = await profileRes.json();
-
-      renderHeader();
-      renderFeed();
-      await loadNotifications();
-    } catch (error) {
-      $('momentsFeed').innerHTML =
-        '<div class="moments-empty">加载失败：' +
-        escapeHtml(error.message) + '</div>';
+    const settings = await settingsReq;
+    if (settings && typeof settings.cover === 'string') {
+      coverUrl = settings.cover;
     }
+    applyCover();
+
+    const profileData = await profileReq;
+    if (profileData && !profileData.error) localProfile = profileData;
+    renderHeader();
+
+    const personasData = await personasReq;
+    if (Array.isArray(personasData)) {
+      userPersona = personasData.find((item) => Number(item.is_default) === 1) ||
+        personasData[0] ||
+        null;
+      renderHeader();
+    }
+
+    const momentsData = await momentsReq;
+    if (Array.isArray(momentsData)) {
+      moments = momentsData;
+      renderFeed();
+    } else {
+      const feed = $('momentsFeed');
+      if (feed) {
+        feed.innerHTML =
+          '<div class="moments-empty">动态加载失败，下拉或者重进这一页再试试。</div>';
+      }
+    }
+
+    await loadNotifications();
   }
 
   function openSheet(id) {
@@ -483,10 +512,31 @@
     }
   }
 
-  async function uploadImage(file, cropAspect) {
+  // 先让浏览器试着解一次：解不出来的图（比如 HEIC）在这里就报错，
+  // 而不是悄悄传上去、之后背景一直不换。
+  function ensureDecodable(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('这张图读不出来（可能是 HEIC），换 JPG 或 PNG 试试'));
+      };
+
+      img.src = url;
+    });
+  }
+
+  async function uploadImage(file, cropAspect, skipCrop) {
     let uploadFile = file;
 
-    if (typeof window.openImageCropper === 'function') {
+    if (!skipCrop && typeof window.openImageCropper === 'function') {
       uploadFile = await window.openImageCropper(file, cropAspect);
     }
 
@@ -604,7 +654,8 @@
     if (!file) return;
 
     try {
-      const url = await uploadImage(file, NaN);
+      await ensureDecodable(file);
+      const url = await uploadImage(file, NaN, true);
 
       const response = await fetch('/api/moments/cover', {
         method: 'POST',

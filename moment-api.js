@@ -243,25 +243,58 @@ module.exports = function (app, db) {
     res.json(rows);
   });
 
-  app.get('/api/moments/settings', (req, res) => {
-    const worldId = getActiveWorldId();
-    const key = 'moments_cover_' + worldId;
+  // 朋友圈封面：全局一份，不再按世界分开。
+  // 以前按世界存，切了世界（或者新建一个世界后）回首页就发现「刚换的背景没了」，
+  // 所以现在优先读全局 key，读不到再回退到老的世界 key，老图不会丢。
+  function readCover(worldId) {
     const row = db.prepare('SELECT value FROM app_settings WHERE key = ?')
-      .get(key);
+      .get('moments_cover');
 
-    res.json({ cover: row ? row.value : '' });
-  });
+    if (row && row.value) return row.value;
 
-  app.post('/api/moments/cover', (req, res) => {
-    const worldId = getActiveWorldId();
-    const key = 'moments_cover_' + worldId;
-    const cover = cleanText(req.body && req.body.cover);
+    if (worldId) {
+      const legacy = db.prepare('SELECT value FROM app_settings WHERE key = ?')
+        .get('moments_cover_' + worldId);
+      if (legacy && legacy.value) return legacy.value;
+    }
 
+    return '';
+  }
+
+  function saveSetting(key, value) {
     db.prepare(`
       INSERT INTO app_settings (key, value)
       VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(key, cover);
+    `).run(key, value);
+  }
+
+  app.get('/api/moments/settings', (req, res) => {
+    let worldId = '';
+    try {
+      worldId = getActiveWorldId();
+    } catch (e) {
+      // 还没有世界观时不该让整个朋友圈设置接口 500，封面按空的返回就行
+      worldId = '';
+    }
+
+    try {
+      res.json({ cover: readCover(worldId) });
+    } catch (e) {
+      res.json({ cover: '' });
+    }
+  });
+
+  app.post('/api/moments/cover', (req, res) => {
+    const cover = cleanText(req.body && req.body.cover);
+
+    saveSetting('moments_cover', cover);
+
+    // 老版本按世界存过封面。这里写完全局键就把老键清掉，
+    // 否则用户「清空封面」后 readCover 会回退到老键，旧图又冒出来。
+    try {
+      db.prepare("DELETE FROM app_settings WHERE key LIKE 'moments_cover_%'").run();
+    } catch (e) {}
 
     res.json({ ok: true, cover });
   });
@@ -408,11 +441,24 @@ module.exports = function (app, db) {
 
   // 手动触发一次自动发布（调试 / 想让角色现在就发一条时用）
   app.post('/api/moments/auto/run', async (req, res) => {
+    // 没配文本模型时这是用户侧的问题，不该报 500（同族接口都是 400）
+    const hasTextModel = db.prepare(`
+      SELECT id FROM model_profiles
+      WHERE is_image = 0
+      LIMIT 1
+    `).get();
+
+    if (!hasTextModel) {
+      return res.status(400).json({
+        error: '还没有配置文本模型，先去「模型 API」里加一个'
+      });
+    }
+
     try {
       const result = await momentAi.runAutoTick(true);
       res.json(result);
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(error.status || 500).json({ error: error.message });
     }
   });
 
@@ -436,6 +482,7 @@ module.exports = function (app, db) {
 
     const modelRow = db.prepare(`
       SELECT * FROM model_profiles
+      WHERE is_image = 0
       ORDER BY is_default DESC, id DESC
       LIMIT 1
     `).get();

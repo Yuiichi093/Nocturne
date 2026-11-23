@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Nocturne · 剧场</title>
+  <script src="/auth-guard.js"></script>
   <link rel="stylesheet" href="/theater-ui.css">
   <script>
     // 跟首页共用同一个夜间模式开关
@@ -101,12 +102,12 @@
       <form id="scriptForm">
         <div class="field">
           <label>剧本标题</label>
-          <input id="title" placeholder="例如：不该喊哥哥" required>
+          <input id="title" placeholder="" required>
         </div>
 
         <div class="field">
           <label>副标题</label>
-          <input id="subtitle" placeholder="例如：初始副本">
+          <input id="subtitle" placeholder="">
         </div>
 
         <div class="field">
@@ -121,7 +122,7 @@
 
         <div class="field">
           <label>世界规则</label>
-          <textarea id="rules" placeholder="例如：现代都市，低魔，不能出现超自然能力"></textarea>
+          <textarea id="rules" placeholder="这个副本的基本设定"></textarea>
         </div>
 
         <div class="modal-actions">

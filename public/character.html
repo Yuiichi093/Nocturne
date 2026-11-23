@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Nocturne · 角色主页</title>
+  <script src="/auth-guard.js"></script>
   <style>
     :root {
       --bg: #f7f7f7;
@@ -301,7 +302,46 @@
     const characterId = params.get('id');
     const $ = (id) => document.getElementById(id);
 
-    if (!characterId) location.href = '/';
+    if (!characterId) {
+      // 没有 id 就直接回首屏；这里不能写 return（inline script 顶层不允许）
+      location.replace('/');
+    }
+
+    // 加载失败时的提示：留在页面上给一个重试入口，别只留空白
+    function showLoadError(message, onRetry) {
+      const nameEl = $('name');
+      if (nameEl) nameEl.textContent = '加载失败';
+
+      const panel = $('homePanel');
+      if (!panel) return;
+
+      const old = $('loadErrorBox');
+      if (old) old.remove();
+
+      const box = document.createElement('div');
+      box.id = 'loadErrorBox';
+      box.className = 'empty';
+      box.textContent = '加载失败：' + (message || '连不上服务') + '。';
+
+      if (typeof onRetry === 'function') {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = '重试';
+        button.style.cssText =
+          'margin-left:8px;padding:2px 12px;border:0;border-radius:999px;' +
+          'background:#111;color:#fff;font:inherit;font-size:13px;';
+        button.addEventListener('click', () => {
+          button.disabled = true;
+          button.textContent = '重试中…';
+          Promise.resolve()
+            .then(onRetry)
+            .catch((error) => showLoadError(error && error.message, onRetry));
+        });
+        box.appendChild(button);
+      }
+
+      panel.insertBefore(box, panel.firstChild);
+    }
 
     function escapeHtml(text) {
       return String(text || '')
@@ -328,14 +368,35 @@
     });
 
     async function load() {
-      const response = await fetch('/api/characters/' + characterId);
-      const data = await response.json();
+      if (!characterId) return;
 
-      if (!response.ok) {
-        alert(data.error || '角色不存在');
-        location.href = '/';
+      let data;
+
+      try {
+        const response = await fetch('/api/characters/' + characterId);
+
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+
+          if (response.status === 404) {
+            // 角色真的不存在：回首页才是对的
+            alert(body.error || '角色不存在');
+            location.href = '/';
+            return;
+          }
+
+          throw new Error(body.error || '角色加载失败');
+        }
+
+        data = await response.json();
+      } catch (error) {
+        // 断网 / 服务被回收：主内容区给提示 + 重试，不要静默空白
+        showLoadError(error.message, load);
         return;
       }
+
+      const old = $('loadErrorBox');
+      if (old) old.remove();
 
       $('name').textContent = data.name;
       $('handle').textContent = data.handle || '';
@@ -359,11 +420,12 @@
       $('tags').innerHTML = tags
         .map((tag) => '<span class="tag">' + escapeHtml(tag) + '</span>')
         .join('');
-
-      $('chatBtn').addEventListener('click', () => {
-        location.href = '/chat.html?character=' + characterId;
-      });
     }
+
+    // 聊天入口与角色数据无关，放外面，避免重试时重复绑定
+    $('chatBtn').addEventListener('click', () => {
+      location.href = '/chat.html?character=' + characterId;
+    });
 
     // ---- 这个角色的朋友圈 ----
     let momentsLoaded = false;
@@ -414,6 +476,7 @@
     async function loadMoments() {
       const box = $('momentsList');
       if (!box) return;
+      if (!characterId) return;
 
       momentsLoaded = true;
 
@@ -421,6 +484,10 @@
         const response = await fetch(
           '/api/moments?character_id=' + encodeURIComponent(characterId)
         );
+
+        if (!response.ok) {
+          throw new Error('朋友圈加载失败');
+        }
 
         const list = await response.json();
 
@@ -439,5 +506,6 @@
     load();
   </script>
   <script src="/back-nav.js"></script>
+  <script src="/save-image.js"></script>
 </body>
 </html>

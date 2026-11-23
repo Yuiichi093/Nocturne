@@ -170,7 +170,31 @@
   const regenList = $('chatRegenList');
   const regenTip = $('chatRegenTip');
   const regenReroll = $('chatRegenReroll');
+  const regenTitle = $('chatRegenTitle');
+  const suggestList = $('suggestList');
   let regenTargetId = 0;
+  // real 'regen' = 「换个说法」；'suggest' = 「我该说什么」。共用同一个面板。
+  let regenMode = 'regen';
+
+  function setRegenMode(mode) {
+    regenMode = mode === 'suggest' ? 'suggest' : 'regen';
+
+    const suggest = regenMode === 'suggest';
+
+    if (regenTitle) {
+      regenTitle.textContent = suggest ? '帮我想几句' : '重新生成';
+    }
+
+    if (regenTip) {
+      regenTip.textContent = suggest
+        ? '你可以这样接：'
+        : '挑一个满意的，不满意就换一批。';
+    }
+
+    if (regenList) regenList.hidden = suggest;
+    if (suggestList) suggestList.hidden = !suggest;
+    if (regenReroll) regenReroll.textContent = suggest ? '再想几句' : '换一批';
+  }
 
   function lastCharacterBubble() {
     const bubbles = Array.from(
@@ -183,6 +207,8 @@
   const plusRegenerate = $('plusRegenerate');
   if (plusRegenerate) {
     plusRegenerate.addEventListener('click', () => {
+      setRegenMode('regen');
+
       const bubble = lastCharacterBubble();
 
       if (!bubble) {
@@ -197,7 +223,10 @@
   }
 
   if (regenReroll) {
-    regenReroll.addEventListener('click', loadCandidates);
+    regenReroll.addEventListener('click', () => {
+      if (regenMode === 'suggest') loadSuggestions();
+      else loadCandidates();
+    });
   }
 
   async function loadCandidates() {
@@ -254,6 +283,95 @@
     } finally {
       if (regenReroll) regenReroll.disabled = false;
     }
+  }
+
+  // ---- 帮我想几句：给「我自己」的 3 条回复，点一下填进输入框（不发送） ----
+  const plusSuggest = $('plusSuggest');
+  if (plusSuggest) {
+    plusSuggest.addEventListener('click', () => {
+      setRegenMode('suggest');
+      openSheet('chatRegenSheet');
+      loadSuggestions();
+    });
+  }
+
+  async function loadSuggestions() {
+    if (!suggestList) return;
+
+    if (regenTip) regenTip.textContent = '正在想…';
+    suggestList.innerHTML = '<div class="regen-card">正在想…</div>';
+    if (regenReroll) regenReroll.disabled = true;
+
+    try {
+      const id = characterId();
+
+      if (!id) {
+        throw new Error('还没选角色');
+      }
+
+      const response = await fetch(
+        '/api/characters/' + id + '/suggest-replies',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count: 3 })
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || '想不出来');
+      }
+
+      const suggestions = Array.isArray(data.suggestions)
+        ? data.suggestions.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+
+      if (!suggestions.length) {
+        throw new Error('没有想出来');
+      }
+
+      if (regenTip) regenTip.textContent = '点一句就填进输入框，发不发你自己定。';
+
+      suggestList.innerHTML = suggestions.slice(0, 3).map((text) => (
+        '<button class="regen-card suggest-card" type="button">'
+        + escapeHtml(text)
+        + '</button>'
+      )).join('');
+    } catch (error) {
+      if (regenTip) regenTip.textContent = '想不出来，再点一次';
+      suggestList.innerHTML =
+        '<div class="regen-card">想不出来，再点一次。（'
+        + escapeHtml(error.message)
+        + '）</div>';
+    } finally {
+      if (regenReroll) regenReroll.disabled = false;
+    }
+  }
+
+  if (suggestList) {
+    suggestList.addEventListener('click', (event) => {
+      const card = event.target.closest('.suggest-card');
+      if (!card) return;
+
+      const input = $('messageInput');
+      if (!input) return;
+
+      const text = (card.textContent || '').trim();
+      if (!text) return;
+
+      // 输入框里已经有内容就问一句，别默默覆盖掉
+      const existing = input.value.trim();
+      if (existing && existing !== text && !confirm('输入框里已经有内容，用这句替换掉？')) {
+        return;
+      }
+
+      input.value = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      closeSheets();
+      input.focus();
+    });
   }
 
   if (regenList) {

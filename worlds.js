@@ -20,7 +20,10 @@ function getActiveWorldId() {
   `).get();
 
   if (!first) {
-    throw new Error('还没有世界观');
+    const error = new Error('还没有世界观，先去「世界观」页建一个');
+    error.status = 409;
+    error.code = 'NO_WORLD';
+    throw error;
   }
 
   db.prepare(`

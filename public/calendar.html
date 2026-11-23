@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Nocturne · 生日与节日</title>
+  <script src="/auth-guard.js"></script>
   <style>
     :root {
       --bg: #f7f7f7;
@@ -327,7 +328,7 @@
         <div class="item-name">我的生日</div>
         <div class="item-sub">所有世界观通用</div>
       </div>
-      <input class="birthday-input" id="userBirthdayInput" placeholder="例如：10-03">
+      <input class="birthday-input" id="userBirthdayInput" placeholder="MM-DD">
     </div>
 
     <div class="list" id="birthdayList">加载中...</div>
@@ -346,7 +347,7 @@
 
         <div class="field">
           <label>日期 / 规则</label>
-          <input id="eventRule" placeholder="例如：每年 3月14日 / 雨季第一天">
+          <input id="eventRule" placeholder="多久一次">
         </div>
 
         <div class="check-row">
@@ -542,7 +543,7 @@
               <input class="birthday-input" type="text"
                 data-birthday-id="${row.id}"
                 value="${escapeHtml(row.birthday || '')}"
-                placeholder="例如：10-03">
+                placeholder="MM-DD">
             </div>
           `;
         }).join('');

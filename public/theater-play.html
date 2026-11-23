@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Nocturne · 剧情</title>
+  <script src="/auth-guard.js"></script>
   <link rel="stylesheet" href="/theater-ui.css">
   <link rel="stylesheet" href="/theater-play.css">
   <script>
@@ -60,7 +61,7 @@
     <div class="sheet-handle"></div>
     <h2>修正剧情</h2>
     <p class="sheet-tip">输入需要持续遵守的剧情修正规则，保存后将重写当前剧情。</p>
-    <textarea id="correctionText" placeholder="例如：旁白不要替用户做决定，不要替用户说话。"></textarea>
+    <textarea id="correctionText" placeholder="想纠正什么就写什么"></textarea>
     <div class="sheet-actions">
       <button class="sheet-btn ghost" data-close type="button">取消</button>
       <button class="sheet-btn" id="saveRewrite" type="button">保存并重写</button>
@@ -126,7 +127,7 @@
     <div class="sheet-handle"></div>
     <h2>剧情走向</h2>
     <p class="sheet-tip">写下你希望接下来往哪走，下次生成时会参考。留空表示不限制。</p>
-    <textarea id="directionText" placeholder="例如：让砂金主动摊牌，气氛紧张一点。"></textarea>
+    <textarea id="directionText" placeholder="接下来想往哪走"></textarea>
     <div class="sheet-actions">
       <button class="sheet-btn ghost" data-close type="button">取消</button>
       <button class="sheet-btn" id="saveDirection" type="button">保存</button>
@@ -139,6 +140,7 @@
     <button class="sheet-btn" id="openAction" type="button">自定义行动</button>
     <button class="sheet-btn" id="directionBtn" type="button">剧情走向</button>
     <button class="sheet-btn" id="drawFromMoreBtn" type="button">给这一幕画一张</button>
+    <button class="sheet-btn" id="costBtn" type="button">省 token</button>
     <button class="sheet-btn" id="branchSessionBtn" type="button">从当前进度创建分支</button>
     <button class="sheet-btn danger" id="deleteSessionBtn" type="button">删除当前剧情</button>
     <button class="sheet-btn ghost" id="backTheater" type="button">返回剧场列表</button>
@@ -149,7 +151,7 @@
     <div class="sheet-handle"></div>
     <h2>给这一幕画一张</h2>
     <p class="sheet-tip">画面描述留空，就让 AI 按最近几段剧情自己写；填了就用你写的。</p>
-    <textarea id="drawPrompt" placeholder="例如：雨夜的旧车站，她收着伞回头，霓虹映在积水里。"></textarea>
+    <textarea id="drawPrompt" placeholder="描述想看的画面"></textarea>
     <div class="field">
       <label>尺寸</label>
       <select id="drawSize">
@@ -165,11 +167,43 @@
     </div>
   </section>
 
+  <section class="sheet" id="costSheet">
+    <div class="sheet-handle"></div>
+    <h2>省 token</h2>
+    <p class="sheet-tip">每走一步都要把之前的剧情再发一遍。精简只压缩老的，最近 8 步原样保留，观感基本不变。</p>
+
+    <div class="lean-row">
+      <div class="lean-label">
+        <span>精简剧情记忆</span>
+        <small>最近 8 步原样，更早的会自动压缩</small>
+      </div>
+      <label class="lean-switch">
+        <input id="theaterLeanToggle" type="checkbox">
+        <span class="lean-track" aria-hidden="true"></span>
+      </label>
+    </div>
+
+    <div class="field">
+      <label for="theaterContextSelect">带多少步剧情</label>
+      <select id="theaterContextSelect">
+        <option value="20">20 步（推荐）</option>
+        <option value="12">12 步（最省）</option>
+        <option value="40">40 步（完整）</option>
+      </select>
+    </div>
+
+    <p class="lean-status" id="costStatus" role="status" hidden></p>
+
+    <button class="sheet-btn ghost" data-close type="button">关闭</button>
+  </section>
+
   <div class="image-viewer" id="imageViewer" aria-hidden="true">
     <img id="imageViewerImg" alt="">
   </div>
 
   <script src="/theater-play.js"></script>
+  <script src="/theater-cost.js"></script>
   <script src="/back-nav.js"></script>
+  <script src="/save-image.js"></script>
 </body>
 </html>

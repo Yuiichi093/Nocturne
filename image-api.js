@@ -7,8 +7,13 @@ const path = require('path');
 const crypto = require('crypto');
 
 function register(app, db) {
-  const uploadDir = path.join(__dirname, 'data', 'uploads');
-  fs.mkdirSync(uploadDir, { recursive: true });
+  // 每个账号的图片目录不一样，只能在请求上下文里现取；
+  // db.uploadsDir() 不带参数时会按当前请求的账号解析
+  function uploadDir() {
+    const dir = db.uploadsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
 
   function cleanText(value) {
     return String(value == null ? '' : value).trim();
@@ -52,7 +57,7 @@ function register(app, db) {
       ? ext
       : '.png';
     const name = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + safeExt;
-    fs.writeFileSync(path.join(uploadDir, name), buffer);
+    fs.writeFileSync(path.join(uploadDir(), name), buffer);
     return '/uploads/' + name;
   }
 
@@ -65,7 +70,7 @@ function register(app, db) {
 
       if (!clean.startsWith('/uploads/')) return;
 
-      const file = path.join(uploadDir, path.basename(clean));
+      const file = path.join(uploadDir(), path.basename(clean));
 
       if (!fs.existsSync(file)) return;
 
