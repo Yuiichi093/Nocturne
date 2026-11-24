@@ -347,6 +347,111 @@ module.exports = function (app, db) {
     return prompt;
   }
 
+  // 身份卡 / 角色设定图都是 /uploads/ 相对地址，统一清洗一下
+  function refImageUrl(value) {
+    let url = cleanText(value);
+
+    if (!url) return '';
+
+    if (/^https?:\/\//i.test(url)) {
+      try {
+        url = new URL(url).pathname || '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    return url.startsWith('/uploads/') ? url : '';
+  }
+
+  function ownerRefImages(ownerType, ownerId, legacyUrl) {
+    let rows = [];
+
+    try {
+      rows = db.prepare(`
+        SELECT image_url FROM ref_images
+        WHERE owner_type = ? AND owner_id = ?
+        ORDER BY sort ASC, id ASC
+      `).all(ownerType, ownerId);
+    } catch (e) {
+      rows = [];
+    }
+
+    const list = [];
+
+    rows.forEach((row) => {
+      const url = refImageUrl(row.image_url);
+      if (url && !list.includes(url)) list.push(url);
+    });
+
+    if (!list.length) {
+      const legacy = refImageUrl(legacyUrl);
+      if (legacy) list.push(legacy);
+    }
+
+    return list;
+  }
+
+  // 角色的全局设定图：角色自己的 + 它绑的用户人设的（跟生图接口的兜底逻辑一致）
+  function characterRefImages(characterId) {
+    if (!Number(characterId)) return [];
+
+    const character = db.prepare('SELECT * FROM characters WHERE id = ?')
+      .get(characterId);
+
+    if (!character) return [];
+
+    const list = ownerRefImages('character', character.id, character.ref_image);
+
+    let persona = null;
+
+    if (Number(character.user_persona_id || 0) > 0) {
+      persona = db.prepare('SELECT * FROM user_personas WHERE id = ?')
+        .get(character.user_persona_id);
+    }
+
+    if (!persona) {
+      persona = db.prepare(`
+        SELECT * FROM user_personas
+        ORDER BY is_default DESC, id DESC
+        LIMIT 1
+      `).get();
+    }
+
+    if (persona) {
+      ownerRefImages('persona', persona.id, persona.ref_image).forEach((url) => {
+        if (!list.includes(url)) list.push(url);
+      });
+    }
+
+    return list;
+  }
+
+  // 本次生图用哪些参考图：身份卡优先，再补被画角色的设定图，去重、上限 4 张
+  function buildSceneReferences(session, characterId) {
+    const merged = [];
+    const sources = [];
+
+    function addAll(urls, tag) {
+      let used = false;
+
+      urls.forEach((url) => {
+        if (merged.length >= 4) return;
+        if (merged.includes(url)) return;
+
+        merged.push(url);
+        used = true;
+      });
+
+      if (used) sources.push(tag);
+    }
+
+    addAll(safeJsonParse(session.identity_refs, []).map(refImageUrl).filter(Boolean), 'identity');
+    addAll(characterRefImages(characterId), 'character');
+
+    return { refImages: merged, sources };
+  }
+
   // 有的家出错时回一坨 JSON，捞一句人话出来
   function imageErrorMessage(raw) {
     const text = cleanText(raw);
@@ -1504,12 +1609,16 @@ module.exports = function (app, db) {
       characterId = Number(castIds[0] || 0);
     }
 
+    const sceneRefs = buildSceneReferences(session, characterId);
+
     let result = null;
 
     try {
       result = await requestTheaterImage({
         prompt,
         size,
+        // 有拼好的参考图就显式传，生图接口优先用它
+        ref_images: sceneRefs.refImages.length ? sceneRefs.refImages : undefined,
         character_id: characterId || undefined,
         model_id: Number(body.model_id || 0) || undefined
       }, req.headers.cookie);
@@ -1536,6 +1645,7 @@ module.exports = function (app, db) {
     }
 
     const withReference = !!(result.data && result.data.with_reference);
+    const referenceError = cleanText(result.data && result.data.reference_error).slice(0, 200);
 
     const meta = {
       kind: 'image',
@@ -1546,6 +1656,17 @@ module.exports = function (app, db) {
       auto_prompted: autoPrompted,
       character_id: characterId || 0
     };
+
+    // 记一下这次参考图是从哪来的，排查「为什么没套上我的设定图」时有用
+    if (sceneRefs.refImages.length) {
+      meta.reference_sources = sceneRefs.sources.slice();
+      meta.reference_count = sceneRefs.refImages.length;
+    }
+
+    // 有参考图却没套上时，把原因一起留在消息里，前端好如实告诉她
+    if (!withReference && referenceError) {
+      meta.reference_error = referenceError;
+    }
 
     const inserted = db.prepare(`
       INSERT INTO theater_messages
@@ -1562,12 +1683,18 @@ module.exports = function (app, db) {
     const message = db.prepare('SELECT * FROM theater_messages WHERE id = ?')
       .get(Number(inserted.lastInsertRowid));
 
-    res.json({
+    const imageResponse = {
       ok: true,
       message,
       prompt,
       auto_prompted: autoPrompted,
       with_reference: withReference
-    });
+    };
+
+    if (!withReference && referenceError) {
+      imageResponse.reference_error = referenceError;
+    }
+
+    res.json(imageResponse);
   });
 };

@@ -80,6 +80,7 @@ createTable(`
     identity_role TEXT NOT NULL DEFAULT '',
     identity_desc TEXT NOT NULL DEFAULT '',
     identity_avatar TEXT NOT NULL DEFAULT '',
+    identity_refs TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -329,6 +330,8 @@ addColumnIfMissing('user_personas', 'world_id', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('theater_scripts', 'identities_json', "TEXT NOT NULL DEFAULT '[]'");
 addColumnIfMissing('theater_scripts', 'world_id', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('theater_sessions', 'world_id', 'INTEGER NOT NULL DEFAULT 0');
+// 身份卡可以挂参考图：建会话时把身份卡的图抄进这个 JSON 列
+addColumnIfMissing('theater_sessions', 'identity_refs', "TEXT NOT NULL DEFAULT ''");
 
 /* ========== 9.5 剧场选项版本回填 ========== */
 // 以前 options 行的 meta_json 只有 { options }，没记 narration_id / version。

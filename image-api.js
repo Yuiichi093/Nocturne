@@ -61,27 +61,44 @@ function register(app, db) {
     return '/uploads/' + name;
   }
 
+  // 把一个参考图地址变成可上传的文件；不认识 / 不存在 / 重复的都丢掉
+  function refEntry(url, existing) {
+    let clean = cleanText(url);
+
+    if (!clean) return null;
+
+    // 老数据里可能存的是 http 开头的完整地址，取 pathname 再判断
+    if (/^https?:\/\//i.test(clean)) {
+      try {
+        clean = new URL(clean).pathname || '';
+      } catch (e) {
+        return null;
+      }
+    }
+
+    if (!clean.startsWith('/uploads/')) return null;
+
+    const file = path.join(uploadDir(), path.basename(clean));
+
+    if (!fs.existsSync(file)) return null;
+
+    if (existing.some((item) => item.file === file)) return null;
+
+    return {
+      file,
+      name: path.basename(file),
+      mime: 'image/' + (path.extname(file).slice(1).toLowerCase() || 'png')
+        .replace('jpg', 'jpeg')
+    };
+  }
+
   // 参考图：角色自己的（可以多张）+ 它的用户人设的（也可以多张）
   function referenceImages(characterId) {
     const files = [];
 
     function push(url) {
-      const clean = cleanText(url);
-
-      if (!clean.startsWith('/uploads/')) return;
-
-      const file = path.join(uploadDir(), path.basename(clean));
-
-      if (!fs.existsSync(file)) return;
-
-      if (files.some((item) => item.file === file)) return;
-
-      files.push({
-        file,
-        name: path.basename(file),
-        mime: 'image/' + (path.extname(file).slice(1).toLowerCase() || 'png')
-          .replace('jpg', 'jpeg')
-      });
+      const entry = refEntry(url, files);
+      if (entry) files.push(entry);
     }
 
     function pushOwner(ownerType, ownerId, legacyUrl) {
@@ -128,6 +145,20 @@ function register(app, db) {
     return files.slice(0, 4);
   }
 
+  // 显式指定参考图（剧场身份卡 + 角色设定图拼好的列表）：有就优先用它
+  function referenceImagesFromUrls(urls) {
+    const files = [];
+
+    if (!Array.isArray(urls)) return files;
+
+    urls.forEach((url) => {
+      const entry = refEntry(url, files);
+      if (entry) files.push(entry);
+    });
+
+    return files.slice(0, 4);
+  }
+
   // 带参考图的请求：OpenAI 的 /images/edits 走 multipart
   async function requestImageWithReference(modelRow, prompt, size, refs) {
     const headers = { ...parseHeaders(modelRow.extra_headers) };
@@ -141,73 +172,75 @@ function register(app, db) {
       '按这些特征来画，不要照抄姿势：' + prompt;
 
     const urls = buildUrls(modelRow.base_url, 'images/edits');
+    const truncated = (text) => String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+
+    // 有的家只认 image，有的只认 image[]。以前同一张图两个字段一起给，
+    // 有些中转会当成重复参数直接 400，所以改成两次尝试：
+    // 第一次所有参考图都用 image，失败再全部用 image[]。
+    const fieldVariants = ['image', 'image[]'];
     let lastError = '';
 
     for (const url of urls) {
-      const form = new FormData();
-      form.append('model', modelRow.model);
-      form.append('prompt', referencePrompt);
-      form.append('n', '1');
-      form.append('size', size || '1024x1024');
+      const attemptErrors = [];
 
-      refs.forEach((ref, index) => {
-        const buffer = fs.readFileSync(ref.file);
-        const blob = new Blob([buffer], { type: ref.mime });
+      for (const field of fieldVariants) {
+        const form = new FormData();
+        form.append('model', modelRow.model);
+        form.append('prompt', referencePrompt);
+        form.append('n', '1');
+        form.append('size', size || '1024x1024');
 
-        // 有的家认 image，有的认 image[]。第一张两个字段都给，
-        // 后面的只给 image[]，免得同一张图重复上传两遍。
-        if (index === 0) {
-          form.append('image', blob, ref.name);
-        }
-
-        form.append('image[]', blob, ref.name);
-      });
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 180000);
-
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: form,
-          signal: controller.signal
+        refs.forEach((ref) => {
+          const buffer = fs.readFileSync(ref.file);
+          const blob = new Blob([buffer], { type: ref.mime });
+          form.append(field, blob, ref.name);
         });
 
-        const text = await response.text();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 180000);
 
-        if (response.ok) {
-          let data = null;
-          try {
-            data = JSON.parse(text);
-          } catch (e) {}
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: form,
+            signal: controller.signal
+          });
 
-          const first = data && data.data && data.data[0];
+          const text = await response.text();
 
-          if (first && first.b64_json) {
-            return { url: saveImage(Buffer.from(first.b64_json, 'base64'), '.png') };
+          if (response.ok) {
+            let data = null;
+            try {
+              data = JSON.parse(text);
+            } catch (e) {}
+
+            const first = data && data.data && data.data[0];
+
+            if (first && first.b64_json) {
+              return { url: saveImage(Buffer.from(first.b64_json, 'base64'), '.png') };
+            }
+
+            if (first && first.url) {
+              const imageResponse = await fetch(first.url);
+              const buffer = Buffer.from(await imageResponse.arrayBuffer());
+              return { url: saveImage(buffer, '.png') };
+            }
+
+            attemptErrors.push(field + '：参考图接口返回格式不认识');
+          } else {
+            attemptErrors.push(field + '：' + (truncated(text) || ('HTTP ' + response.status)));
           }
-
-          if (first && first.url) {
-            const imageResponse = await fetch(first.url);
-            const buffer = Buffer.from(await imageResponse.arrayBuffer());
-            return { url: saveImage(buffer, '.png') };
-          }
-
-          lastError = '参考图接口返回格式不认识';
-        } else {
-          lastError = text.slice(0, 300);
-
-          if (response.status !== 404 && response.status !== 405 && response.status !== 400) {
-            throw new Error(lastError);
-          }
+        } catch (error) {
+          if (error.name === 'AbortError') throw new Error('生图超时');
+          attemptErrors.push(field + '：' + truncated(error.message));
+        } finally {
+          clearTimeout(timer);
         }
-      } catch (error) {
-        if (error.name === 'AbortError') throw new Error('生图超时');
-        lastError = error.message || lastError;
-      } finally {
-        clearTimeout(timer);
       }
+
+      // 这个地址的两种字段都失败，拼起来留着；再换下一个地址
+      lastError = attemptErrors.filter(Boolean).join('；');
     }
 
     throw new Error(lastError || '参考图接口不可用');
@@ -469,10 +502,21 @@ function register(app, db) {
     }
 
     const size = cleanText(req.body && req.body.size);
-    const refs = referenceImages(Number(req.body && req.body.character_id || 0));
+
+    // 剧场会把「身份卡参考图 + 角色设定图」拼好显式传过来，有就用它；
+    // 没传才按 character_id 走原来的兜底
+    const explicitRefs = Array.isArray(req.body && req.body.ref_images)
+      ? req.body.ref_images
+      : [];
+
+    const refs = explicitRefs.length
+      ? referenceImagesFromUrls(explicitRefs)
+      : referenceImages(Number(req.body && req.body.character_id || 0));
 
     try {
       // 有参考图就先试着带参考图生成；这条路不通再退回纯文字生成
+      let referenceError = '';
+
       if (refs.length) {
         try {
           const result = await requestImageWithReference(
@@ -484,11 +528,23 @@ function register(app, db) {
 
           return res.json({ ok: true, url: result.url, with_reference: true });
         } catch (e) {
-          // 继续走下面的纯文字分支
+          // 记住为什么没套上参考图，退回纯文字生成时告诉用户
+          referenceError = String((e && e.message) || '').slice(0, 200);
         }
       }
 
       const url = await requestImage(modelRow, prompt, size);
+
+      // 只有「有参考图但没套上」才带 reference_error；
+      // 本来就没有参考图的，不要凭空多这个字段
+      if (referenceError) {
+        return res.json({
+          ok: true,
+          url,
+          with_reference: false,
+          reference_error: referenceError
+        });
+      }
 
       res.json({ ok: true, url, with_reference: false });
     } catch (error) {

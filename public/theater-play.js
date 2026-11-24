@@ -369,6 +369,14 @@
         const block = document.createElement('div');
         block.className = 'image-block';
 
+        let imageMeta = {};
+
+        try {
+          imageMeta = message.meta_json ? JSON.parse(message.meta_json) : {};
+        } catch (e) {
+          imageMeta = {};
+        }
+
         if (message.image_url) {
           const card = document.createElement('figure');
           card.className = 'scene-image';
@@ -387,6 +395,14 @@
           }
 
           block.appendChild(card);
+
+          // 有参考图但没套上：如实说一句，别让她以为设定图生效了
+          if (imageMeta.with_reference === false && imageMeta.reference_error) {
+            const note = document.createElement('div');
+            note.className = 'image-note image-note-inline';
+            note.textContent = '这次没套上参考图：' + describeImageError(imageMeta.reference_error);
+            block.appendChild(note);
+          }
         } else if (message.content) {
           const text = document.createElement('div');
           text.className = 'image-note';
@@ -802,6 +818,81 @@
     openSheet('drawSheet');
   }
 
+  // 把接口的原始错误（可能是 JSON 串）压成一句人话
+  function describeImageError(raw) {
+    const text = String(raw || '').trim();
+
+    if (!text) return '';
+
+    // 可能是「image：{json}；image[]：{json}」这种两次尝试拼起来的，
+    // 每段单独压一下，重复的原因只留一条
+    const parts = text.split('；').map((part) => {
+      const mark = part.indexOf('：');
+      const body = mark > 0 ? part.slice(mark + 1) : part;
+
+      return describeOneImageError(body);
+    }).filter(Boolean);
+
+    if (!parts.length) return text.slice(0, 200);
+
+    const unique = [];
+
+    parts.forEach((part) => {
+      if (!unique.includes(part)) unique.push(part);
+    });
+
+    return unique.join('；').slice(0, 200);
+  }
+
+  function describeOneImageError(raw) {
+    const text = String(raw || '').trim();
+
+    if (!text) return '';
+
+    if (text[0] === '{' || text[0] === '[') {
+      try {
+        const data = JSON.parse(text);
+        const picked = pickErrorText(data, 0);
+
+        if (picked) return picked.slice(0, 200);
+      } catch (e) {}
+    }
+
+    return text.slice(0, 200);
+  }
+
+  function pickErrorText(data, depth) {
+    if (!data || depth > 3) return '';
+
+    if (typeof data === 'string') return data;
+
+    if (typeof data !== 'object') return '';
+
+    const direct = data.message || data.detail || data.error_description;
+
+    if (typeof direct === 'string' && direct.trim()) return direct.trim();
+
+    if (typeof data.error === 'string' && data.error.trim()) return data.error.trim();
+
+    return pickErrorText(data.error, depth + 1);
+  }
+
+  // 审核拦截单独给人话，别把裸 JSON 怼给她
+  function friendlyImageError(message) {
+    const raw = String(message || '');
+
+    if (/moderation_blocked|safety system|content[ _]policy/i.test(raw)) {
+      const code = /moderation_blocked/i.test(raw)
+        ? 'moderation_blocked'
+        : (/safety system/i.test(raw) ? 'safety system' : 'content policy');
+
+      return '这张图被内容审核拦下了，换个说法再试' +
+        '（少写身体/年龄/暴力细节），或者换个尺寸/模型（' + code + '）';
+    }
+
+    return describeImageError(raw) || raw;
+  }
+
   async function generateSceneImage() {
     if (drawing) return;
 
@@ -846,7 +937,7 @@
     } catch (error) {
       hideDrawing();
       $('drawStatus').classList.add('error');
-      $('drawStatus').textContent = '生成失败：' + error.message;
+      $('drawStatus').textContent = '生成失败：' + friendlyImageError(error.message);
     } finally {
       drawing = false;
       button.disabled = false;

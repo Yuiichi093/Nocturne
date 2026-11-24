@@ -12,6 +12,34 @@ module.exports = function (app, db) {
     }
   }
 
+  // 身份卡的参考图：只留 /uploads/ 的相对地址，去重，最多 4 张
+  function cleanRefImages(value) {
+    if (!Array.isArray(value)) return [];
+
+    const list = [];
+
+    value.forEach((item) => {
+      let url = cleanText(item);
+
+      if (!url) return;
+
+      if (/^https?:\/\//i.test(url)) {
+        try {
+          url = new URL(url).pathname || '';
+        } catch (e) {
+          return;
+        }
+      }
+
+      if (!url.startsWith('/uploads/')) return;
+      if (list.includes(url)) return;
+
+      list.push(url);
+    });
+
+    return list.slice(0, 4);
+  }
+
   function parseScript(row) {
     return {
       ...row,
@@ -184,10 +212,15 @@ module.exports = function (app, db) {
       return res.status(404).json({ error: '剧本不存在' });
     }
 
+    const identityRefImages = godMode
+      ? []
+      : cleanRefImages(body.identity_ref_images);
+
     const result = db.prepare(`
       INSERT INTO theater_sessions
-        (script_id, title, identity_name, identity_role, identity_desc, identity_avatar, world_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (script_id, title, identity_name, identity_role, identity_desc,
+         identity_avatar, identity_refs, world_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       scriptId,
       script.title,
@@ -195,6 +228,7 @@ module.exports = function (app, db) {
       identityRole,
       identityDesc,
       cleanText(body.identity_avatar),
+      identityRefImages.length ? JSON.stringify(identityRefImages) : '',
       Number(script.world_id || getActiveWorldId())
     );
 
@@ -317,8 +351,8 @@ module.exports = function (app, db) {
     const result = db.prepare(`
       INSERT INTO theater_sessions
         (script_id, title, identity_name, identity_role,
-         identity_desc, identity_avatar, status, world_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         identity_desc, identity_avatar, identity_refs, status, world_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       session.script_id,
       title,
@@ -326,6 +360,7 @@ module.exports = function (app, db) {
       session.identity_role,
       session.identity_desc,
       session.identity_avatar,
+      session.identity_refs || '',
       'active',
       worldId
     );

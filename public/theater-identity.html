@@ -266,6 +266,81 @@
       margin-top: 8px;
     }
 
+    /* 有参考图的身份卡给个小标记，不喧哗 */
+    .identity-ref-count {
+      margin-left: 8px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--fill);
+      font-size: 11px;
+      font-weight: 500;
+      opacity: 0.72;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    /* ---------- 身份卡的参考图 ---------- */
+
+    .ref-picker {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .ref-thumb {
+      position: relative;
+      width: 64px;
+      height: 64px;
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--fill);
+    }
+
+    .ref-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .ref-remove {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      font-size: 12px;
+      line-height: 20px;
+    }
+
+    .ref-empty {
+      font-size: 12px;
+      opacity: 0.55;
+    }
+
+    .ref-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .ref-actions button {
+      min-height: 40px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: var(--r-btn);
+      background: var(--fill);
+      color: var(--ink);
+      font: inherit;
+      font-size: 13px;
+    }
+
     .import-row {
       margin-bottom: 16px;
     }
@@ -429,6 +504,22 @@
           <textarea id="identityDesc"></textarea>
         </div>
 
+        <div class="field">
+          <label>参考图</label>
+          <div class="ref-picker" id="identityRefPicker"></div>
+          <div class="ref-actions">
+            <button class="ghost" type="button" onclick="pickIdentityRefFiles()">上传参考图</button>
+            <button
+              class="ghost"
+              type="button"
+              id="identityRefReset"
+              onclick="resetIdentityRefsFromSource()"
+              style="display: none"
+            >用回角色里的设定图</button>
+          </div>
+          <input id="identityRefFiles" type="file" accept="image/*" multiple hidden>
+        </div>
+
         <div class="modal-actions">
           <button type="submit">保存身份</button>
           <button class="ghost" onclick="closeIdentityModal()" type="button">取消</button>
@@ -465,6 +556,11 @@
     let currentScript = null;
     let selectedIndex = -1;
     let editingIndex = -1;
+
+    // 正在编辑的身份卡的参考图（保存时一起写进 identities_json）
+    let modalRefImages = [];
+    let modalRefSource = null;
+    let sourceDefaultRefs = [];
 
     function escapeHtml(text) {
       return String(text || '')
@@ -503,6 +599,105 @@
       }
     }
 
+    // 身份卡上的小标记：有几张参考图，没有就不显示
+    function refBadge(item) {
+      const total = Array.isArray(item.ref_images) ? item.ref_images.length : 0;
+
+      return total ? '<span class="identity-ref-count">参考图 ' + total + '</span>' : '';
+    }
+
+    function renderModalRefs() {
+      const box = document.getElementById('identityRefPicker');
+      box.innerHTML = '';
+
+      modalRefImages.forEach((url, index) => {
+        const thumb = document.createElement('div');
+        thumb.className = 'ref-thumb';
+
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = '参考图';
+        thumb.appendChild(img);
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'ref-remove';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', '移除这张参考图');
+        remove.addEventListener('click', () => {
+          modalRefImages.splice(index, 1);
+          renderModalRefs();
+        });
+        thumb.appendChild(remove);
+
+        box.appendChild(thumb);
+      });
+
+      if (!modalRefImages.length) {
+        const empty = document.createElement('span');
+        empty.className = 'ref-empty';
+        empty.textContent = '还没放参考图，生图时会只用角色的设定图';
+        box.appendChild(empty);
+      }
+    }
+
+    // 来源（角色 / 用户设定）自带的设定图，用来「用回角色里的设定图」
+    function sourceRefs() {
+      if (!modalRefSource || !Array.isArray(identityOptions)) return [];
+      if (!modalRefSource.kind || !modalRefSource.id) return [];
+
+      let world = identityOptions.find(
+        (item) => Number(item.id) === Number(modalRefSource.world_id)
+      );
+
+      if (!world) {
+        world = identityOptions.find((item) => {
+          const bucket = modalRefSource.kind === 'persona'
+            ? item.personas
+            : item.characters;
+
+          return (bucket || []).some(
+            (entry) => Number(entry.id) === Number(modalRefSource.id)
+          );
+        });
+      }
+
+      if (!world) return [];
+
+      const bucket = modalRefSource.kind === 'persona'
+        ? world.personas
+        : world.characters;
+
+      const found = (bucket || []).find(
+        (entry) => Number(entry.id) === Number(modalRefSource.id)
+      );
+
+      return found && Array.isArray(found.ref_images) ? found.ref_images.slice() : [];
+    }
+
+    function updateRefResetButton() {
+      document.getElementById('identityRefReset').style.display =
+        modalRefSource ? '' : 'none';
+    }
+
+    function pickIdentityRefFiles() {
+      document.getElementById('identityRefFiles').click();
+    }
+
+    function resetIdentityRefsFromSource() {
+      const defaults = sourceDefaultRefs.length ? sourceDefaultRefs : sourceRefs();
+
+      if (!defaults.length) {
+        document.getElementById('status').textContent =
+          '来源那边还没有参考图，先上传几张吧';
+        return;
+      }
+
+      modalRefImages = defaults.slice(0, 4);
+      renderModalRefs();
+      document.getElementById('status').textContent = '已用回来源里的设定图，记得保存身份';
+    }
+
     function renderIdentities() {
       const list = document.getElementById('identityList');
 
@@ -522,7 +717,10 @@
             onclick="event.stopPropagation(); openIdentityModal(${index})"
             type="button"
           >✎</button>
-          <h2>${escapeHtml(item.name || '未命名')}</h2>
+          <h2>
+            ${escapeHtml(item.name || '未命名')}
+            ${refBadge(item)}
+          </h2>
           <p class="role">${escapeHtml(item.role || '')}</p>
           ${item.desc ? `
           <details class="identity-details" onclick="event.stopPropagation()">
@@ -539,8 +737,9 @@
       renderIdentities();
     }
 
-    function openIdentityModal(index) {
+    async function openIdentityModal(index) {
       editingIndex = Number(index);
+      document.getElementById('identityRefFiles').value = '';
 
       if (editingIndex >= 0) {
         const item = currentScript.identities[editingIndex];
@@ -548,12 +747,35 @@
         document.getElementById('identityName').value = item.name || '';
         document.getElementById('identityRole').value = item.role || '';
         document.getElementById('identityDesc').value = item.desc || '';
+
+        modalRefImages = Array.isArray(item.ref_images)
+          ? item.ref_images.slice(0, 4)
+          : [];
+        modalRefSource = item.ref_source && item.ref_source.kind
+          ? Object.assign({}, item.ref_source)
+          : null;
       } else {
         document.getElementById('modalTitle').textContent = '添加身份';
         document.getElementById('identityForm').reset();
+        modalRefImages = [];
+        modalRefSource = null;
       }
 
       document.getElementById('status').textContent = '等待操作。';
+      renderModalRefs();
+      updateRefResetButton();
+
+      if (modalRefSource) {
+        try {
+          await ensureIdentityOptions();
+          sourceDefaultRefs = sourceRefs();
+        } catch (e) {
+          sourceDefaultRefs = [];
+        }
+      } else {
+        sourceDefaultRefs = [];
+      }
+
       document.getElementById('modalBackdrop').classList.add('open');
     }
 
@@ -597,8 +819,13 @@
       const item = {
         name: document.getElementById('identityName').value.trim(),
         role: document.getElementById('identityRole').value.trim(),
-        desc: document.getElementById('identityDesc').value.trim()
+        desc: document.getElementById('identityDesc').value.trim(),
+        ref_images: modalRefImages.slice(0, 4)
       };
+
+      if (modalRefSource && modalRefSource.kind) {
+        item.ref_source = Object.assign({}, modalRefSource);
+      }
 
       if (!item.name || !item.role) {
         document.getElementById('status').textContent = '姓名和身份必填';
@@ -621,6 +848,61 @@
       } catch (error) {
         document.getElementById('status').textContent =
           '保存失败：' + error.message;
+      }
+    });
+
+    // 上传参考图：每张单独走 POST /api/upload（字段名 image），最多留 4 张
+    document.getElementById('identityRefFiles').addEventListener('change', async (event) => {
+      const files = Array.from(event.target.files || []);
+      const status = document.getElementById('status');
+
+      event.target.value = '';
+
+      if (!files.length) return;
+
+      let added = 0;
+
+      for (const file of files) {
+        if (modalRefImages.length >= 4) {
+          status.textContent = '参考图最多 4 张，多的先删一张再传';
+          break;
+        }
+
+        status.textContent = '上传中...';
+
+        try {
+          const form = new FormData();
+          form.append('image', file);
+
+          const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: form
+          });
+
+          const data = await response.json().catch(() => ({}));
+
+          if (!response.ok) {
+            throw new Error(data.error || '上传失败');
+          }
+
+          const url = String(data.url || '');
+
+          // 只存 /uploads/... 相对地址，别把绝对路径写进剧本
+          if (url.startsWith('/uploads/') && !modalRefImages.includes(url)) {
+            modalRefImages.push(url);
+            added += 1;
+          }
+
+          renderModalRefs();
+        } catch (error) {
+          status.textContent = '上传失败：' + error.message;
+          renderModalRefs();
+          return;
+        }
+      }
+
+      if (added) {
+        status.textContent = '已添加 ' + added + ' 张参考图，记得保存身份';
       }
     });
 
@@ -670,7 +952,10 @@
             identity_name: identity.name,
             identity_role: identity.role,
             identity_desc: identity.desc || '',
-            identity_avatar: ''
+            identity_avatar: '',
+            identity_ref_images: Array.isArray(identity.ref_images)
+              ? identity.ref_images
+              : []
           })
         });
 
@@ -806,9 +1091,10 @@
       let name = '';
       let role = '';
       let desc = '';
+      let item = null;
 
       if (kind === 'persona') {
-        const item = world.personas.find(
+        item = world.personas.find(
           (entry) => Number(entry.id) === Number(id)
         );
         if (!item) return;
@@ -817,7 +1103,7 @@
         role = '用户设定';
         desc = item.bio || item.persona || '';
       } else {
-        const item = world.characters.find(
+        item = world.characters.find(
           (entry) => Number(entry.id) === Number(id)
         );
         if (!item) return;
@@ -829,9 +1115,18 @@
           .join('\n\n');
       }
 
+      const refs = Array.isArray(item.ref_images) ? item.ref_images.slice(0, 4) : [];
+
+      modalRefImages = refs;
+      modalRefSource = { kind: kind, id: Number(id), world_id: Number(worldId) };
+      sourceDefaultRefs = refs.slice();
+
       document.getElementById('identityName').value = name;
       document.getElementById('identityRole').value = role;
       document.getElementById('identityDesc').value = desc;
+
+      renderModalRefs();
+      updateRefResetButton();
 
       closeIdentityPicker();
     }
