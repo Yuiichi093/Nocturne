@@ -134,6 +134,18 @@
     </div>
   </section>
 
+  <section class="sheet" id="optionsEditSheet">
+    <div class="sheet-handle"></div>
+    <h2>编辑这一版选项</h2>
+    <p class="sheet-tip">一行一个选项，保留 2 到 6 条；只改这一版，其他版本不受影响。</p>
+    <textarea id="optionsEditText" placeholder="一行一个选项"></textarea>
+    <p class="lean-status" id="optionsEditStatus" role="status" hidden></p>
+    <div class="sheet-actions">
+      <button class="sheet-btn ghost" data-close type="button">取消</button>
+      <button class="sheet-btn" id="optionsEditSave" type="button">保存</button>
+    </div>
+  </section>
+
   <section class="sheet" id="moreSheet">
     <div class="sheet-handle"></div>
     <h2>更多</h2>
@@ -165,6 +177,15 @@
       <button class="sheet-btn ghost" data-close type="button">取消</button>
       <button class="sheet-btn" id="drawGenerate" type="button">生成插画</button>
     </div>
+  </section>
+
+  <section class="sheet" id="historyBranchSheet">
+    <div class="sheet-handle"></div>
+    <h2>从以前的进度创建分支</h2>
+    <p class="sheet-tip">选一步，从这里开一个分支；现在的剧情不会被改动。</p>
+    <div id="historyBranchList" class="sheet-content">正在加载…</div>
+    <p class="lean-status" id="historyBranchStatus" role="status" hidden></p>
+    <button class="sheet-btn ghost" data-close type="button">关闭</button>
   </section>
 
   <section class="sheet" id="costSheet">

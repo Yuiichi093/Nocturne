@@ -462,6 +462,125 @@ module.exports = function (app, db) {
     return fallback;
   }
 
+  // ---------- 选项版本 ----------
+  // 同一段旁白可以有好几批选项（换一批 / 手改），都留在 theater_messages 里，
+  // meta_json 里记 narration_id + version；旧版本不删，前端才能翻回去看。
+  function optionsMeta(row) {
+    const meta = safeJsonParse(row && row.meta_json, {});
+
+    return {
+      options: Array.isArray(meta.options) ? meta.options : [],
+      narration_id: Number(meta.narration_id) || 0,
+      version: Number(meta.version) || 0,
+      source: String(meta.source || ''),
+      edited_at: String(meta.edited_at || '')
+    };
+  }
+
+  function lastNarrationOf(sessionId) {
+    return db.prepare(`
+      SELECT * FROM theater_messages
+      WHERE session_id = ? AND role = 'narration'
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(sessionId) || null;
+  }
+
+  // 某段旁白的选项版本 = 这段旁白之后、下一段旁白之前的 options 行
+  function optionRowsOfNarration(sessionId, narrationId) {
+    const nextNarration = db.prepare(`
+      SELECT id FROM theater_messages
+      WHERE session_id = ? AND role = 'narration' AND id > ?
+      ORDER BY id ASC
+      LIMIT 1
+    `).get(sessionId, narrationId);
+
+    const upper = nextNarration ? Number(nextNarration.id) : Number.MAX_SAFE_INTEGER;
+
+    return db.prepare(`
+      SELECT * FROM theater_messages
+      WHERE session_id = ? AND role = 'options' AND id > ? AND id < ?
+      ORDER BY id ASC
+    `).all(sessionId, narrationId, upper);
+  }
+
+  function versionedOptions(sessionId, narrationId) {
+    return optionRowsOfNarration(sessionId, narrationId).map((row, index) => {
+      const meta = optionsMeta(row);
+
+      return {
+        id: Number(row.id),
+        options: meta.options,
+        version: meta.version || index + 1,
+        created_at: row.created_at,
+        source: meta.source,
+        edited_at: meta.edited_at
+      };
+    });
+  }
+
+  function nextOptionVersion(sessionId, narrationId) {
+    const rows = optionRowsOfNarration(sessionId, narrationId);
+    let max = 0;
+
+    rows.forEach((row, index) => {
+      const version = optionsMeta(row).version || index + 1;
+      if (version > max) max = version;
+    });
+
+    return max + 1;
+  }
+
+  // 追加一版选项，返回这一版的对象（id / options / version / created_at / source）
+  function insertOptionVersion(sessionId, narrationId, options, source) {
+    const version = nextOptionVersion(sessionId, narrationId);
+
+    const result = db.prepare(`
+      INSERT INTO theater_messages
+        (session_id, role, content, meta_json)
+      VALUES (?, 'options', '下一步', ?)
+    `).run(
+      sessionId,
+      JSON.stringify({
+        options,
+        narration_id: Number(narrationId),
+        version,
+        source
+      })
+    );
+
+    const row = db.prepare('SELECT * FROM theater_messages WHERE id = ?')
+      .get(Number(result.lastInsertRowid));
+    const meta = optionsMeta(row);
+
+    return {
+      id: Number(row.id),
+      options: meta.options,
+      version: meta.version || version,
+      created_at: row.created_at,
+      source: meta.source || source,
+      edited_at: ''
+    };
+  }
+
+  function normalizeOptionList(value) {
+    if (!Array.isArray(value)) {
+      return { error: '选项格式不对' };
+    }
+
+    const list = value.map((item) => cleanText(item)).filter(Boolean);
+
+    if (list.length < 2 || list.length > 6) {
+      return { error: '选项要保留 2 到 6 条' };
+    }
+
+    if (list.some((item) => item.length > 200)) {
+      return { error: '单个选项最长 200 字' };
+    }
+
+    return { list };
+  }
+
   app.post('/api/theater/sessions/:id/options/refresh', async (req, res) => {
     const session = db.prepare('SELECT * FROM theater_sessions WHERE id = ?')
       .get(req.params.id);
@@ -514,42 +633,249 @@ module.exports = function (app, db) {
       history
     );
 
-    const lastOptions = db.prepare(`
-      SELECT * FROM theater_messages
-      WHERE session_id = ? AND role = 'options'
-      ORDER BY id DESC
-      LIMIT 1
-    `).get(session.id);
-
-    if (lastOptions) {
-      db.prepare(`
-        UPDATE theater_messages
-        SET meta_json = ?
-        WHERE id = ?
-      `).run(
-        JSON.stringify({ options }),
-        lastOptions.id
-      );
-
-      const updated = db.prepare('SELECT * FROM theater_messages WHERE id = ?')
-        .get(lastOptions.id);
-
-      return res.json({ ok: true, options, message: updated });
-    }
-
-    const result = db.prepare(`
-      INSERT INTO theater_messages
-        (session_id, role, content, meta_json)
-      VALUES (?, 'options', '下一步', ?)
-    `).run(
+    // 换一批选项：追加一版，旧的留着（以前是直接覆盖，旧版永远丢了）
+    const version = insertOptionVersion(
       session.id,
-      JSON.stringify({ options })
+      Number(lastNarration.id),
+      options,
+      'refresh'
     );
 
-    const message = db.prepare('SELECT * FROM theater_messages WHERE id = ?')
-      .get(Number(result.lastInsertRowid));
+    res.json({
+      ok: true,
+      options,
+      message: db.prepare('SELECT * FROM theater_messages WHERE id = ?')
+        .get(version.id),
+      narration_id: Number(lastNarration.id),
+      version
+    });
+  });
 
-    res.json({ ok: true, options, message });
+  // 某段旁白的全部选项版本（默认最后一段），翻页条用
+  app.get('/api/theater/sessions/:id/options', (req, res) => {
+    const session = db.prepare('SELECT * FROM theater_sessions WHERE id = ?')
+      .get(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({ error: '剧场会话不存在' });
+    }
+
+    let narrationId = Number(req.query.narration_id) || 0;
+
+    if (narrationId > 0) {
+      const narration = db.prepare(`
+        SELECT id FROM theater_messages
+        WHERE session_id = ? AND role = 'narration' AND id = ?
+      `).get(session.id, narrationId);
+
+      if (!narration) {
+        return res.status(404).json({ error: '这一段旁白不存在' });
+      }
+    } else {
+      const lastNarration = lastNarrationOf(session.id);
+
+      if (!lastNarration) {
+        return res.json({
+          ok: true,
+          narration_id: 0,
+          total: 0,
+          active_index: -1,
+          versions: []
+        });
+      }
+
+      narrationId = Number(lastNarration.id);
+    }
+
+    const versions = versionedOptions(session.id, narrationId);
+
+    res.json({
+      ok: true,
+      narration_id: narrationId,
+      total: versions.length,
+      active_index: versions.length ? versions.length - 1 : -1,
+      versions
+    });
+  });
+
+  // 只重新生成选项（旁白不动），追加新版本
+  app.post('/api/theater/sessions/:id/options', async (req, res) => {
+    const session = db.prepare('SELECT * FROM theater_sessions WHERE id = ?')
+      .get(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({ error: '剧场会话不存在' });
+    }
+
+    const script = db.prepare('SELECT * FROM theater_scripts WHERE id = ?')
+      .get(session.script_id);
+
+    if (!script) {
+      return res.status(404).json({ error: '剧本不存在' });
+    }
+
+    const body = req.body || {};
+    let narration = null;
+
+    if (Number(body.narration_id) > 0) {
+      narration = db.prepare(`
+        SELECT * FROM theater_messages
+        WHERE session_id = ? AND role = 'narration' AND id = ?
+      `).get(session.id, Number(body.narration_id));
+    } else {
+      narration = lastNarrationOf(session.id);
+    }
+
+    if (!narration) {
+      return res.status(400).json({ error: '还没有旁白可以生成选项' });
+    }
+
+    const modelRow = db.prepare(`
+      SELECT * FROM model_profiles
+      WHERE is_image = 0
+      ORDER BY is_default DESC, id DESC
+      LIMIT 1
+    `).get();
+
+    if (!modelRow) {
+      return res.status(400).json({ error: '还没有配置模型 API' });
+    }
+
+    const history = db.prepare(`
+      SELECT role, content, image_url FROM theater_messages
+      WHERE session_id = ? AND id < ?
+      ORDER BY id DESC
+      LIMIT 20
+    `).all(session.id, narration.id).reverse();
+
+    const options = await generateTheaterOptions(
+      modelRow,
+      script,
+      session,
+      narration.content,
+      history
+    );
+
+    const version = insertOptionVersion(
+      session.id,
+      Number(narration.id),
+      options,
+      'regenerate'
+    );
+
+    const versions = versionedOptions(session.id, Number(narration.id));
+
+    res.json({
+      ok: true,
+      narration_id: Number(narration.id),
+      total: versions.length,
+      active_index: versions.length - 1,
+      version,
+      versions
+    });
+  });
+
+  // 编辑任意一版选项（以前的版本也能改）
+  app.put('/api/theater/options/:id', (req, res) => {
+    const row = db.prepare(`
+      SELECT * FROM theater_messages WHERE id = ? AND role = 'options'
+    `).get(req.params.id);
+
+    if (!row) {
+      return res.status(404).json({ error: '这一版选项不见了' });
+    }
+
+    const body = req.body || {};
+    const checked = normalizeOptionList(body.options);
+
+    if (checked.error) {
+      return res.status(400).json({ error: checked.error });
+    }
+
+    const meta = safeJsonParse(row.meta_json, {});
+
+    meta.options = checked.list;
+    meta.edited_at = new Date().toISOString();
+
+    // 老数据没回填过的话，这里顺手补上归属，别让版本翻页找不到它
+    if (!Number(meta.narration_id)) {
+      const narration = db.prepare(`
+        SELECT id FROM theater_messages
+        WHERE session_id = ? AND role = 'narration' AND id < ?
+        ORDER BY id DESC LIMIT 1
+      `).get(row.session_id, row.id);
+
+      if (narration) {
+        meta.narration_id = Number(narration.id);
+        meta.version = meta.version || nextOptionVersion(row.session_id, Number(narration.id));
+      }
+    }
+
+    meta.source = meta.source || 'legacy';
+
+    db.prepare('UPDATE theater_messages SET meta_json = ? WHERE id = ?')
+      .run(JSON.stringify(meta), row.id);
+
+    const updated = db.prepare('SELECT * FROM theater_messages WHERE id = ?')
+      .get(row.id);
+
+    res.json({
+      ok: true,
+      version: {
+        id: Number(updated.id),
+        options: checked.list,
+        version: Number(meta.version) || 0,
+        created_at: updated.created_at,
+        source: String(meta.source || ''),
+        edited_at: String(meta.edited_at || '')
+      }
+    });
+  });
+
+  // 删掉某一版选项；一段旁白至少留一版
+  app.delete('/api/theater/options/:id', (req, res) => {
+    const row = db.prepare(`
+      SELECT * FROM theater_messages WHERE id = ? AND role = 'options'
+    `).get(req.params.id);
+
+    if (!row) {
+      return res.status(404).json({ error: '这一版选项不见了' });
+    }
+
+    const meta = optionsMeta(row);
+    let narrationId = meta.narration_id;
+
+    if (!narrationId) {
+      const narration = db.prepare(`
+        SELECT id FROM theater_messages
+        WHERE session_id = ? AND role = 'narration' AND id < ?
+        ORDER BY id DESC LIMIT 1
+      `).get(row.session_id, row.id);
+
+      narrationId = narration ? Number(narration.id) : 0;
+    }
+
+    const siblings = narrationId
+      ? optionRowsOfNarration(row.session_id, narrationId)
+      : [row];
+
+    if (siblings.length <= 1) {
+      return res.status(400).json({ error: '这一步至少要留一版选项' });
+    }
+
+    db.prepare('DELETE FROM theater_messages WHERE id = ?').run(row.id);
+
+    const left = narrationId
+      ? versionedOptions(row.session_id, narrationId)
+      : [];
+
+    res.json({
+      ok: true,
+      removed: Number(row.id),
+      narration_id: narrationId,
+      total: left.length,
+      active_index: left.length ? left.length - 1 : -1
+    });
   });
 
   // 重选：把最后一段旁白和最后一批选项删掉，然后重新生成
@@ -561,12 +887,6 @@ module.exports = function (app, db) {
       return res.status(404).json({ error: '剧场会话不存在' });
     }
 
-    const lastOptions = db.prepare(`
-      SELECT id FROM theater_messages
-      WHERE session_id = ? AND role = 'options'
-      ORDER BY id DESC LIMIT 1
-    `).get(session.id);
-
     const lastNarration = db.prepare(`
       SELECT id FROM theater_messages
       WHERE session_id = ? AND role = 'narration'
@@ -575,17 +895,145 @@ module.exports = function (app, db) {
 
     let removed = 0;
 
-    if (lastOptions) {
-      db.prepare('DELETE FROM theater_messages WHERE id = ?').run(lastOptions.id);
-      removed += 1;
-    }
-
     if (lastNarration) {
+      // 这一段的所有选项版本一起删，不能只删最新一版，
+      // 不然重选之后旧版本会挂在上一段旁边
+      const versions = optionRowsOfNarration(session.id, Number(lastNarration.id));
+
+      versions.forEach((row) => {
+        db.prepare('DELETE FROM theater_messages WHERE id = ?').run(row.id);
+        removed += 1;
+      });
+
       db.prepare('DELETE FROM theater_messages WHERE id = ?').run(lastNarration.id);
       removed += 1;
     }
 
     res.json({ ok: true, removed });
+  });
+
+  // 撤回上一步：把最后一整步删掉，回到上一次的选项卡片，让她重新选。
+  // 「一整步」= 她的行动 + 最后一段旁白 + 那批选项 + 这一步之后画的插画。
+  app.post('/api/theater/sessions/:id/rollback', (req, res) => {
+    const session = db.prepare('SELECT * FROM theater_sessions WHERE id = ?')
+      .get(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({ error: '剧场会话不存在' });
+    }
+
+    const lastNarration = db.prepare(`
+      SELECT * FROM theater_messages
+      WHERE session_id = ? AND role = 'narration'
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(session.id);
+
+    // 上一批选项在最后一段旁白之前，它才是要回去的地方，不能被删
+    const prevOptions = lastNarration
+      ? db.prepare(`
+          SELECT * FROM theater_messages
+          WHERE session_id = ? AND role = 'options' AND id < ?
+          ORDER BY id DESC
+          LIMIT 1
+        `).get(session.id, lastNarration.id)
+      : null;
+
+    if (!lastNarration || !prevOptions) {
+      return res.status(400).json({ error: '已经回到开头了，没有更早的选项可以返回' });
+    }
+
+    let removed = 0;
+
+    // 删除 + 更新时间要么一起成，要么一起不动
+    db.exec('BEGIN');
+
+    try {
+      const result = db.prepare(`
+        DELETE FROM theater_messages
+        WHERE session_id = ? AND id > ?
+      `).run(session.id, prevOptions.id);
+
+      removed = Number(result.changes || 0);
+
+      db.prepare(`
+        UPDATE theater_sessions
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(session.id);
+
+      db.exec('COMMIT');
+    } catch (writeError) {
+      db.exec('ROLLBACK');
+      throw writeError;
+    }
+
+    res.json({ ok: true, removed, options: prevOptions });
+  });
+
+  // 「从以前的进度创建分支」用的步骤列表：每段旁白算一步，
+  // 带上紧随它的那批选项 id，前端点一下就从那一刻开分支。
+  app.get('/api/theater/sessions/:id/history', (req, res) => {
+    const session = db.prepare('SELECT * FROM theater_sessions WHERE id = ?')
+      .get(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({ error: '剧场会话不存在' });
+    }
+
+    const requested = Number(req.query.limit);
+    const limit = Number.isFinite(requested) && requested > 0
+      ? Math.min(Math.floor(requested), 60)
+      : 40;
+
+    const rows = db.prepare(`
+      SELECT id, role, content, created_at
+      FROM theater_messages
+      WHERE session_id = ?
+      ORDER BY id ASC
+    `).all(session.id);
+
+    // 每段旁白算一步，index 从 0 起（0 = 开头那段），按 id 升序
+    const steps = [];
+    let pending = null;
+
+    rows.forEach((row) => {
+      if (row.role === 'narration') {
+        if (pending) steps.push(pending);
+
+        pending = {
+          narration_id: Number(row.id),
+          options_id: 0,
+          preview: '',
+          created_at: row.created_at,
+          index: steps.length,
+          text: String(row.content == null ? '' : row.content)
+        };
+
+        return;
+      }
+
+      // 紧随旁白的第一批选项才是这一步的选项
+      if (pending && row.role === 'options' && !pending.options_id) {
+        pending.options_id = Number(row.id);
+      }
+    });
+
+    if (pending) steps.push(pending);
+
+    steps.forEach((step) => {
+      const plain = stripMetaNotes(step.text)
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      step.preview = plain.length > 40 ? plain.slice(0, 40) + '…' : plain;
+      delete step.text;
+    });
+
+    // 太长就只回最近 limit 步；index 还是全局的，前端「第 N 步」不会错位
+    const visible = steps.length > limit ? steps.slice(steps.length - limit) : steps;
+
+    res.json({ ok: true, steps: visible });
   });
 
   app.post('/api/theater/sessions/:id/next', async (req, res) => {
@@ -874,7 +1322,12 @@ module.exports = function (app, db) {
 
         optionsResult = writeOptions.run(
           session.id,
-          JSON.stringify({ options: finalOptions })
+          JSON.stringify({
+            options: finalOptions,
+            narration_id: Number(narrationResult.lastInsertRowid),
+            version: 1,
+            source: 'next'
+          })
         );
 
         touchSession.run(session.id);

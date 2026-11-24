@@ -330,6 +330,71 @@ addColumnIfMissing('theater_scripts', 'identities_json', "TEXT NOT NULL DEFAULT 
 addColumnIfMissing('theater_scripts', 'world_id', 'INTEGER NOT NULL DEFAULT 0');
 addColumnIfMissing('theater_sessions', 'world_id', 'INTEGER NOT NULL DEFAULT 0');
 
+/* ========== 9.5 剧场选项版本回填 ========== */
+// 以前 options 行的 meta_json 只有 { options }，没记 narration_id / version。
+// 这里按「前面最近一条旁白」补上归属，同一段旁的多个版本按 id 顺序编号；
+// 已经有 narration_id 的行直接跳过，所以反复启动也不会改坏。
+if (tableExists('theater_messages')) {
+  const rows = db.prepare(`
+    SELECT id, session_id, role, meta_json
+    FROM theater_messages
+    WHERE role IN ('narration', 'options')
+    ORDER BY session_id ASC, id ASC
+  `).all();
+
+  const theaterLastNarration = {};
+  const theaterVersionCounter = {};
+
+  db.exec('BEGIN');
+
+  try {
+    for (const row of rows) {
+      if (row.role === 'narration') {
+        theaterLastNarration[row.session_id] = Number(row.id);
+        continue;
+      }
+
+      let meta = {};
+
+      try {
+        meta = JSON.parse(row.meta_json || '{}') || {};
+      } catch (e) {
+        meta = {};
+      }
+
+      if (!Array.isArray(meta.options)) meta.options = [];
+
+      const narrationId = theaterLastNarration[row.session_id] || 0;
+
+      if (!narrationId) continue;
+
+      const existingVersion = Number(meta.version) || 0;
+
+      if (Number(meta.narration_id) === narrationId && existingVersion > 0) {
+        if (existingVersion > (theaterVersionCounter[narrationId] || 0)) {
+          theaterVersionCounter[narrationId] = existingVersion;
+        }
+        continue;
+      }
+
+      const version = (theaterVersionCounter[narrationId] || 0) + 1;
+      theaterVersionCounter[narrationId] = version;
+
+      meta.narration_id = narrationId;
+      meta.version = version;
+      meta.source = meta.source || 'legacy';
+
+      db.prepare('UPDATE theater_messages SET meta_json = ? WHERE id = ?')
+        .run(JSON.stringify(meta), row.id);
+    }
+
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    console.error('[migrate] 剧场选项版本回填失败：' + (error && error.message));
+  }
+}
+
 /* ========== 10. 默认世界 + 数据回填 ========== */
 let defaultWorld = db.prepare(
   'SELECT * FROM worlds ORDER BY id ASC LIMIT 1'

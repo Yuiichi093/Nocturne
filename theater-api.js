@@ -288,6 +288,32 @@ module.exports = function (app, db) {
     // 可以只在某条消息处开分支：up_to_message_id 之后的剧情不带过去
     const upTo = Number(req.body && req.body.up_to_message_id || 0);
 
+    // 也可以「从某一版选项开分支」：复制这一段旁白 + 只带这一版选项
+    const narrationId = Number(req.body && req.body.narration_id || 0);
+    const optionsId = Number(req.body && req.body.options_id || 0);
+
+    if (narrationId > 0) {
+      const narrationRow = db.prepare(`
+        SELECT id FROM theater_messages
+        WHERE id = ? AND session_id = ? AND role = 'narration'
+      `).get(narrationId, session.id);
+
+      if (!narrationRow) {
+        return res.status(400).json({ error: '要开分支的这一步不存在' });
+      }
+
+      if (optionsId > 0) {
+        const optionsRow = db.prepare(`
+          SELECT id FROM theater_messages
+          WHERE id = ? AND session_id = ? AND role = 'options' AND id > ?
+        `).get(optionsId, session.id, narrationId);
+
+        if (!optionsRow) {
+          return res.status(400).json({ error: '这一版选项不在这段旁白下面' });
+        }
+      }
+    }
+
     const result = db.prepare(`
       INSERT INTO theater_sessions
         (script_id, title, identity_name, identity_role,
@@ -306,7 +332,36 @@ module.exports = function (app, db) {
 
     const newSessionId = Number(result.lastInsertRowid);
 
-    if (upTo > 0) {
+    if (narrationId > 0) {
+      // 这一版之前的正文都带过去
+      db.prepare(`
+        INSERT INTO theater_messages
+          (session_id, role, character_id, content, image_url, meta_json, created_at)
+        SELECT ?, role, character_id, content, image_url, meta_json, created_at
+        FROM theater_messages
+        WHERE session_id = ? AND id < ?
+        ORDER BY id ASC
+      `).run(newSessionId, session.id, narrationId);
+
+      // 这一段旁白 + 选中的那一版选项（同段的其他版本不带）
+      db.prepare(`
+        INSERT INTO theater_messages
+          (session_id, role, character_id, content, image_url, meta_json, created_at)
+        SELECT ?, role, character_id, content, image_url, meta_json, created_at
+        FROM theater_messages
+        WHERE session_id = ? AND id = ?
+      `).run(newSessionId, session.id, narrationId);
+
+      if (optionsId > 0) {
+        db.prepare(`
+          INSERT INTO theater_messages
+            (session_id, role, character_id, content, image_url, meta_json, created_at)
+          SELECT ?, role, character_id, content, image_url, meta_json, created_at
+          FROM theater_messages
+          WHERE session_id = ? AND id = ?
+        `).run(newSessionId, session.id, optionsId);
+      }
+    } else if (upTo > 0) {
       db.prepare(`
         INSERT INTO theater_messages
           (session_id, role, character_id, content, image_url, meta_json, created_at)

@@ -176,6 +176,86 @@ html[data-theme="dark"] .play-header {
   box-shadow: var(--shadow-card);
 }
 
+/* 选项版本翻页条：‹ 3/5 ›（参考相册胶囊，但不要时间） */
+.options-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: fit-content;
+  margin: 0 auto 10px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--fill);
+}
+
+.options-pager[hidden] {
+  display: none;
+}
+
+.options-pager-arrow {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.options-pager-arrow:active {
+  background: var(--fill-strong);
+}
+
+.options-pager-arrow:disabled {
+  color: var(--muted);
+  opacity: 0.4;
+}
+
+.options-pager-label {
+  min-width: 40px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.options-list {
+  display: block;
+}
+
+.options-list:empty {
+  display: none;
+}
+
+.options-head-actions button:disabled {
+  opacity: 0.35;
+}
+
+/* 卡片底部小字按钮：从这一版选项开分支 */
+.option-branch {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+}
+
+.option-branch:active {
+  color: var(--ink);
+}
+
 .options-head {
   display: flex;
   align-items: center;
@@ -656,4 +736,43 @@ html[data-theme="dark"] .bottom-nav {
 
 #costSheet .sheet-btn {
   margin-top: 4px;
+}
+
+/* 从以前的进度创建分支 */
+
+.history-step {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+}
+
+.history-step:active {
+  background: var(--fill-strong);
+}
+
+.history-step-title {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.history-step-sub {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+#historyBranchList .sheet-btn {
+  margin-top: 14px;
 }

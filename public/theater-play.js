@@ -15,6 +15,9 @@
   let messages = [];
   let cast = [];
   let currentOptions = [];
+  let optionVersions = [];      // 当前这段旁白的全部选项版本
+  let optionVersionIndex = 0;   // 正在看第几版（0 起）
+  let optionNarrationId = 0;    // 这些版本属于哪段旁白
   let sending = false;
   let drawing = false;
 
@@ -60,8 +63,22 @@
     return cast.find((item) => Number(item.id) === Number(id)) || null;
   }
 
+  // 长会话里真正滚动的是 document（.story 自己没有 overflow），
+  // 两处都拨到底，重进旧会话才不会停在最上面。
   function scrollToBottom() {
-    $('story').scrollTop = $('story').scrollHeight;
+    const story = $('story');
+
+    if (story) story.scrollTop = story.scrollHeight;
+
+    const scroller = document.scrollingElement || document.documentElement;
+
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+
+    // 有些老 WebView 只认 window.scrollTo，两处都拨一下才稳
+    if (typeof window.scrollTo === 'function') {
+      const body = document.body;
+      window.scrollTo(0, scroller ? scroller.scrollHeight : (body ? body.scrollHeight : 0));
+    }
   }
 
   // 加载失败时就地给提示 + 重试，别让页面永远停在「加载中...」
@@ -168,10 +185,19 @@
     await renderChapters();
     renderInfo();
     await loadMessages();
+
+    // 初次进来时字体/图片还没把高度撑开，补两次滚动：一帧后 + 250ms；
+    // 只在这里补，之后追加消息走 scrollToBottom() 就够了
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(scrollToBottom);
+    }
+
+    setTimeout(scrollToBottom, 250);
+
     return true;
   }
 
-  async function loadMessages() {
+  async function loadMessages(keepVersionId) {
     let rows;
 
     try {
@@ -191,6 +217,69 @@
     }
 
     messages = Array.isArray(rows) ? rows : [];
+
+    optionVersions = [];
+    optionVersionIndex = 0;
+    optionNarrationId = 0;
+
+    // 最后一批选项属于哪段旁白，就去把那段旁白的所有版本拿回来（一次请求，翻页不再发）
+    let lastOptions = null;
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'options') {
+        lastOptions = messages[i];
+        break;
+      }
+    }
+
+    if (lastOptions) {
+      const lastOptionsMeta = parseJson(lastOptions.meta_json, {});
+
+      // 优先按位置找（最后一段旁白的 id）。分支会话是从别的会话复制过来的，
+      // meta 里的 narration_id 还是原会话的 id，照着用会查不到，翻页和「换一批」都会失灵。
+      let narrationId = 0;
+
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i].role === 'narration') {
+          narrationId = Number(messages[i].id);
+          break;
+        }
+      }
+
+      if (!narrationId) {
+        narrationId = Number(lastOptionsMeta.narration_id) || 0;
+      }
+
+      if (narrationId) {
+        optionNarrationId = narrationId;
+
+        try {
+          const versionResponse = await fetch(
+            '/api/theater/sessions/' + sessionId +
+            '/options?narration_id=' + narrationId
+          );
+
+          if (versionResponse.ok) {
+            const versionData = await versionResponse.json();
+
+            if (versionData && Array.isArray(versionData.versions)) {
+              optionVersions = versionData.versions;
+            }
+          }
+        } catch (error) {
+          // 版本接口挂了别挡住剧情，下面会用消息里那一条兜底
+        }
+      }
+
+      const keepIndex = optionVersions.findIndex(
+        (version) => Number(version.id) === Number(keepVersionId)
+      );
+
+      optionVersionIndex = keepIndex >= 0
+        ? keepIndex
+        : Math.max(optionVersions.length - 1, 0);
+    }
+
     renderStory();
     return true;
   }
@@ -310,38 +399,160 @@
         if (Number(message.id) !== Number(lastOptionsId)) return;
 
         const meta = parseJson(message.meta_json, {});
-        const options = Array.isArray(meta.options) ? meta.options : [];
-        currentOptions = options;
+
+        // 版本接口没回数据（老数据 / 断网）时，用消息里自带的这一批兜底
+        if (!optionVersions.length) {
+          optionVersions = [{
+            id: Number(message.id),
+            options: Array.isArray(meta.options) ? meta.options : [],
+            version: Number(meta.version) || 1,
+            source: String(meta.source || '')
+          }];
+          optionVersionIndex = 0;
+        }
+
+        if (optionVersionIndex >= optionVersions.length) {
+          optionVersionIndex = optionVersions.length - 1;
+        }
 
         const card = document.createElement('div');
         card.className = 'options-card';
-        card.innerHTML = `
-          <div class="options-head">
-            <h2>下一步</h2>
-            <div class="options-head-actions">
-              <button id="regenerateBtn" type="button" title="重选这一步">⟲</button>
-              <button id="refreshOptionsBtn" type="button" title="只换选项">↻</button>
-              <button id="editOptionsBtn" type="button" title="自定义行动">✎</button>
-            </div>
-          </div>
-          ${options.map((option, index) => `
-            <button class="option-item" data-option-index="${index}" type="button">
-              ${escapeHtml(option)}
-            </button>
-          `).join('')}
-          <button class="option-custom" id="customActionBtn" type="button">
-            自定义行动
-          </button>
-          <button class="option-custom ghost${getDirection() ? ' has-value' : ''}" id="directionChipBtn" type="button">
-            ${getDirection() ? '剧情走向：已设置（点击修改）' : '设置剧情走向'}
-          </button>
-        `;
+
+        // 版本翻页条：‹ 3/5 ›（只有一版时整条隐藏）
+        const pager = document.createElement('div');
+        pager.className = 'options-pager';
+        pager.id = 'optionsPager';
+
+        const prevButton = document.createElement('button');
+        prevButton.id = 'optionsPrevBtn';
+        prevButton.className = 'options-pager-arrow';
+        prevButton.type = 'button';
+        prevButton.title = '上一版选项';
+        prevButton.textContent = '‹';
+
+        const pagerLabel = document.createElement('span');
+        pagerLabel.id = 'optionsPagerLabel';
+        pagerLabel.className = 'options-pager-label';
+
+        const nextButton = document.createElement('button');
+        nextButton.id = 'optionsNextBtn';
+        nextButton.className = 'options-pager-arrow';
+        nextButton.type = 'button';
+        nextButton.title = '下一版选项';
+        nextButton.textContent = '›';
+
+        pager.appendChild(prevButton);
+        pager.appendChild(pagerLabel);
+        pager.appendChild(nextButton);
+        card.appendChild(pager);
+
+        const head = document.createElement('div');
+        head.className = 'options-head';
+
+        const heading = document.createElement('h2');
+        heading.textContent = '下一步';
+
+        const actions = document.createElement('div');
+        actions.className = 'options-head-actions';
+
+        [
+          { id: 'rollbackBtn', title: '撤回上一步', text: '↩' },
+          { id: 'regenerateBtn', title: '换一批选项', text: '⟲' },
+          { id: 'editOptionsBtn', title: '编辑这一版', text: '✎' },
+          { id: 'deleteOptionsBtn', title: '删除这一版', text: '🗑' }
+        ].forEach((def) => {
+          const button = document.createElement('button');
+          button.id = def.id;
+          button.type = 'button';
+          button.title = def.title;
+          button.textContent = def.text;
+          actions.appendChild(button);
+        });
+
+        head.appendChild(heading);
+        head.appendChild(actions);
+        card.appendChild(head);
+
+        const list = document.createElement('div');
+        list.className = 'options-list';
+        list.id = 'optionsList';
+        card.appendChild(list);
+
+        const customButton = document.createElement('button');
+        customButton.className = 'option-custom';
+        customButton.id = 'customActionBtn';
+        customButton.type = 'button';
+        customButton.textContent = '自定义行动';
+        card.appendChild(customButton);
+
+        const directionButton = document.createElement('button');
+        directionButton.className = 'option-custom ghost' + (getDirection() ? ' has-value' : '');
+        directionButton.id = 'directionChipBtn';
+        directionButton.type = 'button';
+        directionButton.textContent = getDirection()
+          ? '剧情走向：已设置（点击修改）'
+          : '设置剧情走向';
+        card.appendChild(directionButton);
+
+        const branchButton = document.createElement('button');
+        branchButton.className = 'option-branch';
+        branchButton.id = 'branchFromVersionBtn';
+        branchButton.type = 'button';
+        branchButton.textContent = '从这一版开分支';
+        card.appendChild(branchButton);
 
         story.appendChild(card);
+        syncOptionsView();
       }
     });
 
     scrollToBottom();
+  }
+
+  // 把当前这一版选项铺到卡片上：翻页、编辑、删除后都只走这里，不发请求
+  function syncOptionsView() {
+    const list = $('optionsList');
+    if (!list) return;
+
+    const total = optionVersions.length;
+    const active = optionVersions[optionVersionIndex] || null;
+
+    list.innerHTML = '';
+    currentOptions = active && Array.isArray(active.options)
+      ? active.options.slice()
+      : [];
+
+    currentOptions.forEach((option, index) => {
+      const button = document.createElement('button');
+      button.className = 'option-item';
+      button.type = 'button';
+      button.dataset.optionIndex = String(index);
+      button.textContent = String(option);
+      list.appendChild(button);
+    });
+
+    const pager = $('optionsPager');
+    const prev = $('optionsPrevBtn');
+    const next = $('optionsNextBtn');
+    const label = $('optionsPagerLabel');
+    const deleteButton = $('deleteOptionsBtn');
+
+    if (pager) pager.hidden = total <= 1;
+    if (label) label.textContent = (optionVersionIndex + 1) + '/' + Math.max(total, 1);
+    if (prev) prev.disabled = optionVersionIndex <= 0;
+    if (next) next.disabled = optionVersionIndex >= total - 1;
+    if (deleteButton) deleteButton.disabled = total <= 1;
+  }
+
+  function stepOptionVersion(delta) {
+    if (!optionVersions.length) return;
+
+    const nextIndex = optionVersionIndex + delta;
+
+    if (nextIndex < 0 || nextIndex >= optionVersions.length) return;
+
+    optionVersionIndex = nextIndex;
+    syncOptionsView();
   }
 
   function showTyping() {
@@ -493,6 +704,7 @@
         `;
       }).join('') + `
         <button class="sheet-btn" id="chapterBranchBtn" type="button">从当前进度创建分支</button>
+        <button class="sheet-btn ghost" id="chapterPrevBranchBtn" type="button">从以前的进度创建分支</button>
       `;
     } catch (error) {
       box.textContent = '加载失败：' + error.message;
@@ -534,30 +746,210 @@
     $('sheetBackdrop').classList.remove('open');
   }
 
-  async function refreshOptions() {
-    if (sending) return;
+  // 换一批选项：只重新生成选项，旁白不动，旧版本留着
+  async function regenerateOptions() {
+    if (sending || !optionNarrationId) return;
 
     sending = true;
+
+    const button = $('regenerateBtn');
+    if (button) button.disabled = true;
+
     showTyping();
 
     try {
       const response = await fetch(
-        '/api/theater/sessions/' + sessionId + '/options/refresh',
-        { method: 'POST' }
+        '/api/theater/sessions/' + sessionId + '/options',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ narration_id: optionNarrationId })
+        }
       );
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(data.error || '刷新选项失败');
+        throw new Error(data.error || '换一批失败');
       }
 
       await loadMessages();
     } catch (error) {
-      alert('刷新选项失败：' + error.message);
+      alert('换一批选项失败：' + error.message);
     } finally {
       hideTyping();
       sending = false;
+
+      const again = $('regenerateBtn');
+      if (again) again.disabled = false;
+    }
+  }
+
+  let editingOptionsId = 0;
+
+  function editOptionsVersion() {
+    const active = optionVersions[optionVersionIndex];
+    if (!active) return;
+
+    editingOptionsId = Number(active.id);
+
+    const textarea = $('optionsEditText');
+    if (textarea) {
+      textarea.value = (Array.isArray(active.options) ? active.options : []).join('\n');
+    }
+
+    const status = $('optionsEditStatus');
+    if (status) {
+      status.hidden = true;
+      status.textContent = '';
+      status.classList.remove('error');
+    }
+
+    const save = $('optionsEditSave');
+    if (save) save.disabled = false;
+
+    openSheet('optionsEditSheet');
+  }
+
+  async function saveOptionsEdit() {
+    if (sending || !editingOptionsId) return;
+
+    const textarea = $('optionsEditText');
+    const status = $('optionsEditStatus');
+    const save = $('optionsEditSave');
+
+    const lines = String(textarea && textarea.value ? textarea.value : '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (lines.length < 2 || lines.length > 6) {
+      if (status) {
+        status.hidden = false;
+        status.textContent = '保留 2 到 6 条选项';
+        status.classList.add('error');
+      }
+      return;
+    }
+
+    sending = true;
+    if (save) save.disabled = true;
+
+    const savedId = editingOptionsId;
+
+    try {
+      const response = await fetch('/api/theater/options/' + savedId, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ options: lines })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || '保存失败');
+      }
+
+      closeSheets();
+      await loadMessages(savedId);
+    } catch (error) {
+      if (status) {
+        status.hidden = false;
+        status.textContent = '保存失败：' + error.message;
+        status.classList.add('error');
+      }
+    } finally {
+      sending = false;
+      if (save) save.disabled = false;
+    }
+  }
+
+  async function deleteOptionsVersion() {
+    if (sending) return;
+
+    const active = optionVersions[optionVersionIndex];
+    if (!active || optionVersions.length <= 1) return;
+
+    if (!confirm('删掉这一版选项？其他版本还在。')) return;
+
+    sending = true;
+
+    const button = $('deleteOptionsBtn');
+    if (button) button.disabled = true;
+
+    try {
+      const response = await fetch('/api/theater/options/' + active.id, {
+        method: 'DELETE'
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || '删除失败');
+      }
+
+      await loadMessages();
+    } catch (error) {
+      alert('删除失败：' + error.message);
+    } finally {
+      sending = false;
+
+      const again = $('deleteOptionsBtn');
+      if (again) again.disabled = optionVersions.length <= 1;
+    }
+  }
+
+  // 从正在看的这一版选项开分支
+  async function branchFromVersion() {
+    if (sending) return;
+
+    const active = optionVersions[optionVersionIndex];
+
+    if (!active || !optionNarrationId) return;
+
+    sending = true;
+
+    const button = $('branchFromVersionBtn');
+    if (button) {
+      button.disabled = true;
+      button.textContent = '正在创建分支…';
+    }
+
+    try {
+      const response = await fetch(
+        '/api/theater/sessions/' + sessionId + '/fork',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            narration_id: optionNarrationId,
+            options_id: Number(active.id),
+            title: (session && session.title ? session.title : '剧情') + ' · 分支'
+          })
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || '创建分支失败');
+      }
+
+      if (data.session && data.session.id) {
+        location.href = '/theater-play.html?session=' + data.session.id;
+        return;
+      }
+
+      throw new Error('新分支没有创建成功');
+    } catch (error) {
+      alert('创建分支失败：' + error.message);
+      sending = false;
+
+      const again = $('branchFromVersionBtn');
+      if (again) {
+        again.disabled = false;
+        again.textContent = '从这一版开分支';
+      }
     }
   }
 
@@ -610,35 +1002,38 @@
     }
   }
 
-  async function regenerate() {
+  // 撤回上一步：删掉刚刚这一步，回到上一次的选项重选
+  async function rollbackStep() {
     if (sending) return;
 
+    if (!confirm('撤回这一步？这段剧情会被删掉，回到上一步的选项。')) return;
+
     sending = true;
-    showTyping();
+
+    const button = $('rollbackBtn');
+    if (button) button.disabled = true;
 
     try {
       const response = await fetch(
-        '/api/theater/sessions/' + sessionId + '/undo',
+        '/api/theater/sessions/' + sessionId + '/rollback',
         { method: 'POST' }
       );
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(data.error || '重选失败');
+        throw new Error(data.error || '撤回失败');
       }
 
       await loadMessages();
     } catch (error) {
-      alert('重选失败：' + error.message);
+      alert('撤回失败：' + error.message);
+    } finally {
       sending = false;
-      hideTyping();
-      return;
-    }
 
-    sending = false;
-    hideTyping();
-    await sendAction('');
+      const again = $('rollbackBtn');
+      if (again) again.disabled = false;
+    }
   }
 
   $('story').addEventListener('click', (event) => {
@@ -658,13 +1053,38 @@
       return;
     }
 
-    if (event.target.closest('#regenerateBtn')) {
-      regenerate();
+    if (event.target.closest('#optionsPrevBtn')) {
+      stepOptionVersion(-1);
       return;
     }
 
-    if (event.target.closest('#refreshOptionsBtn')) {
-      refreshOptions();
+    if (event.target.closest('#optionsNextBtn')) {
+      stepOptionVersion(1);
+      return;
+    }
+
+    if (event.target.closest('#rollbackBtn')) {
+      rollbackStep();
+      return;
+    }
+
+    if (event.target.closest('#regenerateBtn')) {
+      regenerateOptions();
+      return;
+    }
+
+    if (event.target.closest('#editOptionsBtn')) {
+      editOptionsVersion();
+      return;
+    }
+
+    if (event.target.closest('#deleteOptionsBtn')) {
+      deleteOptionsVersion();
+      return;
+    }
+
+    if (event.target.closest('#branchFromVersionBtn')) {
+      branchFromVersion();
       return;
     }
 
@@ -674,8 +1094,7 @@
       return;
     }
 
-    if (event.target.closest('#customActionBtn') ||
-        event.target.closest('#editOptionsBtn')) {
+    if (event.target.closest('#customActionBtn')) {
       openSheet('actionSheet');
     }
   });
@@ -683,6 +1102,8 @@
   $('continueBtn').addEventListener('click', () => {
     sendAction('');
   });
+
+  $('optionsEditSave').addEventListener('click', saveOptionsEdit);
 
   $('drawBtn').addEventListener('click', openDrawSheet);
 
@@ -793,14 +1214,19 @@
     }
   });
 
-  async function createBranch() {
+  async function createBranch(upTo) {
+    const upToId = Number(upTo) || 0;
+    const payload = upToId > 0
+      ? { up_to_message_id: upToId, title: (session.title || '剧情') + ' · 分支' }
+      : {};
+
     try {
       const response = await fetch(
         '/api/theater/sessions/' + sessionId + '/fork',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({})
+          body: JSON.stringify(payload)
         }
       );
 
@@ -814,6 +1240,72 @@
     } catch (error) {
       alert('创建分支失败：' + error.message);
     }
+  }
+
+  // 从以前的进度开分支：先拉一份步骤列表，点哪一步就从哪一步开
+  async function openHistoryBranch() {
+    const list = $('historyBranchList');
+    const status = $('historyBranchStatus');
+
+    list.textContent = '正在加载…';
+    status.textContent = '';
+    status.classList.remove('error');
+    status.hidden = true;
+
+    openSheet('historyBranchSheet');
+
+    let steps = [];
+
+    try {
+      const response = await fetch(
+        '/api/theater/sessions/' + sessionId + '/history?limit=40'
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || '加载不了历史进度');
+      }
+
+      steps = Array.isArray(data.steps) ? data.steps : [];
+    } catch (error) {
+      list.textContent = '';
+      status.classList.add('error');
+      status.hidden = false;
+      status.textContent = '加载失败：' + error.message;
+      return;
+    }
+
+    if (!steps.length) {
+      list.textContent = '还没有可以开分支的进度。';
+      return;
+    }
+
+    list.innerHTML = '';
+
+    steps
+      .slice()
+      .reverse()
+      .forEach((step) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'history-step';
+        row.dataset.branchUpTo = String(
+          Number(step.options_id) || Number(step.narration_id) || 0
+        );
+
+        const title = document.createElement('div');
+        title.className = 'history-step-title';
+        title.textContent = '第 ' + (Number(step.index) + 1) + ' 步';
+
+        const preview = document.createElement('div');
+        preview.className = 'history-step-sub';
+        preview.textContent = step.preview || '（这一段没有预览文字）';
+
+        row.appendChild(title);
+        row.appendChild(preview);
+        list.appendChild(row);
+      });
   }
 
   async function deleteCurrentSession() {
@@ -857,6 +1349,11 @@
       return;
     }
 
+    if (event.target.id === 'chapterPrevBranchBtn') {
+      openHistoryBranch();
+      return;
+    }
+
     const openRow = event.target.closest('[data-open-session]');
     if (openRow) {
       location.href = '/theater-play.html?session=' + openRow.dataset.openSession;
@@ -883,6 +1380,16 @@
         alert('删除失败：' + error.message);
       }
     }
+  });
+
+  $('historyBranchList').addEventListener('click', (event) => {
+    const row = event.target.closest('[data-branch-up-to]');
+    if (!row) return;
+
+    const upTo = Number(row.dataset.branchUpTo);
+    if (!upTo) return;
+
+    createBranch(upTo);
   });
 
   document.querySelectorAll('[data-panel]').forEach((button) => {
