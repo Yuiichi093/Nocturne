@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f2f2f2">
+  <title>诊断</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .diag-list { display: grid; gap: 8px; }
+    .diag-row {
+      background: #fff;
+      border-radius: 14px;
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      word-break: break-all;
+    }
+    .diag-row .diag-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-weight: 600;
+    }
+    .diag-ok { color: #2f7d4f; }
+    .diag-bad { color: #c0392b; }
+    .diag-body {
+      margin-top: 4px;
+      color: #666;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">诊断</p>
+      <h1>自检</h1>
+    </div>
+    <div class="header-side">
+      <a class="ghost-btn" href="/index.html">返回</a>
+    </div>
+  </header>
+
+  <main class="page-body">
+    <section class="settings-card">
+      <h2>基本信息</h2>
+      <div class="diag-list" id="diagEnv"></div>
+    </section>
+
+    <section class="settings-card">
+      <h2>接口</h2>
+      <div class="diag-list" id="diagList">检测中…</div>
+      <button class="ghost-btn" id="diagRetry" type="button" style="margin-top:12px">重新检测</button>
+    </section>
+  </main>
+
+  <script src="/debug.js"></script>
+</body>
+</html>

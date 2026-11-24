@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nocturne · 剧场</title>
+  <script src="/auth-guard.js"></script>
+  <link rel="stylesheet" href="/theater-ui.css">
+  <script>
+    // 跟首页共用同一个夜间模式开关
+    try {
+      if (localStorage.getItem('saudade-theme') === 'dark') {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    } catch (e) {}
+  </script>
+  <style>
+    /* 给右下角加号留出空间 */
+    body {
+      padding-bottom: calc(112px + var(--safe));
+    }
+
+    .script-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .script-card {
+      padding: 22px;
+      border-radius: var(--r-card);
+      background: var(--card);
+      box-shadow: var(--shadow-card);
+    }
+
+    .script-card h2 {
+      margin: 0 0 4px;
+      font-size: 20px;
+      font-weight: 650;
+      letter-spacing: -0.015em;
+    }
+
+    .script-card .sub {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .script-card .premise {
+      margin: 0 0 20px;
+      color: var(--ink-soft);
+      font-size: 14px;
+      line-height: 1.78;
+      /* 只留 3 行预览，太长的背景不再占满整屏 */
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .script-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .script-actions button {
+      flex: 1;
+      min-height: 46px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 14px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-size: 15px;
+      font-weight: 590;
+    }
+
+    .script-actions button:first-child {
+      flex: 2;
+    }
+
+    .script-actions button.ghost {
+      background: var(--fill);
+      color: var(--ink);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <button class="back" onclick="nocturneBack()" type="button">‹</button>
+    <h1>剧场</h1>
+  </header>
+
+  <div class="script-list" id="scriptList">加载中...</div>
+
+  <button class="fab" id="addBtn" type="button">+</button>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal">
+      <h2 id="modalTitle">新建剧本</h2>
+
+      <form id="scriptForm">
+        <div class="field">
+          <label>剧本标题</label>
+          <input id="title" placeholder="" required>
+        </div>
+
+        <div class="field">
+          <label>副标题</label>
+          <input id="subtitle" placeholder="">
+        </div>
+
+        <div class="field">
+          <label>背景</label>
+          <textarea id="premise" placeholder="故事发生在哪里，基本设定是什么"></textarea>
+        </div>
+
+        <div class="field">
+          <label>开场</label>
+          <textarea id="opening" placeholder="进入故事时看到的第一段剧情"></textarea>
+        </div>
+
+        <div class="field">
+          <label>世界规则</label>
+          <textarea id="rules" placeholder="这个副本的基本设定"></textarea>
+        </div>
+
+        <div class="modal-actions">
+          <button type="submit">保存剧本</button>
+          <button class="ghost" id="cancelBtn" type="button">取消</button>
+        </div>
+
+        <div id="status">等待操作。</div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function escapeHtml(text) {
+      return String(text || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    async function loadScripts() {
+      const list = $('scriptList');
+
+      try {
+        const response = await fetch('/api/theater/scripts');
+        const rows = await response.json();
+
+        if (!rows.length) {
+          list.innerHTML = '<div class="empty">还没有剧本，点右下角黑色加号新建。</div>';
+          return;
+        }
+
+        list.innerHTML = rows.map((row) => `
+          <div class="script-card">
+            <h2>${escapeHtml(row.title)}</h2>
+            <p class="sub">${escapeHtml(row.subtitle || '未命名副本')}</p>
+            <p class="premise">${escapeHtml(row.premise || '还没有写背景。')}</p>
+            <div class="script-actions">
+              <button data-enter="${row.id}" type="button">进入剧本</button>
+              <button class="ghost" data-edit="${row.id}" type="button">编辑</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (error) {
+        list.innerHTML = '<div class="empty">加载失败：' + escapeHtml(error.message) + '</div>';
+      }
+    }
+
+    let editingScript = null;
+
+    function openModal(script) {
+      editingScript = script || null;
+      $('modalTitle').textContent = editingScript ? '编辑剧本' : '新建剧本';
+
+      $('title').value = editingScript ? (editingScript.title || '') : '';
+      $('subtitle').value = editingScript ? (editingScript.subtitle || '') : '';
+      $('premise').value = editingScript ? (editingScript.premise || '') : '';
+      $('opening').value = editingScript ? (editingScript.opening || '') : '';
+      $('rules').value = editingScript ? (editingScript.rules || '') : '';
+
+      $('modalBackdrop').classList.add('open');
+    }
+
+    function closeModal() {
+      $('modalBackdrop').classList.remove('open');
+      $('status').textContent = '等待操作。';
+      editingScript = null;
+      $('scriptForm').reset();
+    }
+
+    $('addBtn').addEventListener('click', () => openModal(null));
+    $('cancelBtn').addEventListener('click', closeModal);
+
+    $('modalBackdrop').addEventListener('click', (event) => {
+      if (event.target === $('modalBackdrop')) closeModal();
+    });
+
+    $('scriptForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const payload = {
+        title: $('title').value.trim(),
+        subtitle: $('subtitle').value.trim(),
+        premise: $('premise').value.trim(),
+        opening: $('opening').value.trim(),
+        rules: $('rules').value.trim(),
+        cast_ids: editingScript && Array.isArray(editingScript.cast_ids)
+          ? editingScript.cast_ids
+          : [],
+        identities: editingScript && Array.isArray(editingScript.identities)
+          ? editingScript.identities
+          : []
+      };
+
+      if (!payload.title) {
+        $('status').textContent = '剧本标题必填';
+        return;
+      }
+
+      try {
+        $('status').textContent = '保存中...';
+
+        const url = editingScript
+          ? '/api/theater/scripts/' + editingScript.id
+          : '/api/theater/scripts';
+
+        const response = await fetch(url, {
+          method: editingScript ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '保存失败');
+        }
+
+        closeModal();
+        await loadScripts();
+      } catch (error) {
+        $('status').textContent = '保存失败：' + error.message;
+      }
+    });
+
+    $('scriptList').addEventListener('click', async (event) => {
+      const enterId = event.target.dataset.enter;
+      const editId = event.target.dataset.edit;
+
+      if (enterId) {
+        location.href = '/theater-identity.html?script=' + enterId;
+        return;
+      }
+
+      if (editId) {
+        try {
+          const response = await fetch('/api/theater/scripts/' + editId);
+          const script = await response.json();
+
+          if (!response.ok) {
+            throw new Error(script.error || '读取剧本失败');
+          }
+
+          openModal(script);
+        } catch (error) {
+          alert('读取剧本失败：' + error.message);
+        }
+      }
+    });
+
+    loadScripts();
+  </script>
+  <script src="/back-nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,961 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nocturne · 选择身份</title>
+  <script src="/auth-guard.js"></script>
+  <link rel="stylesheet" href="/theater-ui.css">
+  <script>
+    // 跟首页共用同一个夜间模式开关
+    try {
+      if (localStorage.getItem('saudade-theme') === 'dark') {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    } catch (e) {}
+  </script>
+  <style>
+    /* 底部固定条会盖住内容，这里留出空间 */
+    body {
+      padding-bottom: calc(172px + var(--safe));
+    }
+
+    .identity-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 10px;
+    }
+
+    .identity-card {
+      position: relative;
+      width: 100%;
+      padding: 22px;
+      border: 0;
+      border-radius: var(--r-card);
+      background: var(--card);
+      box-shadow: var(--shadow-card);
+      color: var(--ink);
+      font: inherit;
+      text-align: left;
+    }
+
+    .identity-card.selected {
+      background: var(--accent);
+      color: var(--accent-ink);
+      box-shadow: none;
+    }
+
+    /* 选中后右上角出现一个对勾，不用再猜选没选中 */
+    .identity-card.selected::after {
+      content: "✓";
+      position: absolute;
+      right: 20px;
+      top: 20px;
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--accent-ink);
+      color: var(--accent);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .identity-card h2 {
+      margin: 0 0 4px;
+      padding-right: 34px;
+      font-size: 20px;
+      font-weight: 650;
+      letter-spacing: -0.015em;
+    }
+
+    .identity-card .role {
+      margin: 0 0 10px;
+      font-size: 13px;
+      opacity: 0.7;
+    }
+
+    .identity-card .desc {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.7;
+      opacity: 0.62;
+    }
+
+    .edit-btn {
+      position: absolute;
+      right: 16px;
+      top: 16px;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: var(--fill);
+      color: inherit;
+      font-size: 14px;
+    }
+
+    .identity-card.selected .edit-btn {
+      background: rgba(255, 255, 255, 0.18);
+      margin-right: 38px;
+    }
+
+    .add-btn {
+      width: 100%;
+      min-height: 50px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: var(--r-btn);
+      background: var(--fill);
+      color: var(--ink);
+      font: inherit;
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .confirm-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 12px 20px calc(14px + var(--safe));
+      border-top: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+    }
+
+    html[data-theme="dark"] .confirm-bar {
+      background: rgba(18, 18, 20, 0.86);
+    }
+
+    .confirm-bar button {
+      width: 100%;
+      min-height: 50px;
+      border: 0;
+      border-radius: var(--r-btn);
+      background: var(--accent);
+      color: var(--accent-ink);
+      font: inherit;
+      font-size: 16px;
+      font-weight: 590;
+    }
+
+    .confirm-bar button.ghost {
+      min-height: 38px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    /* ---------- 以前的剧情 ---------- */
+
+    .session-section-title {
+      margin: 26px 4px 10px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .session-card {
+      padding: 18px 20px;
+      margin-bottom: 10px;
+      border-radius: 18px;
+      background: var(--card);
+      box-shadow: var(--shadow-card);
+      color: var(--ink);
+    }
+
+    .session-head {
+      cursor: pointer;
+    }
+
+    .session-title {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .session-sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .session-details {
+      margin-top: 12px;
+      color: var(--ink-soft);
+      font-size: 13px;
+    }
+
+    .session-details summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 13px;
+      list-style: none;
+    }
+
+    .session-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .session-details summary::before {
+      content: "›";
+      display: inline-block;
+      margin-right: 6px;
+      transition: transform 0.18s ease;
+    }
+
+    .session-details[open] summary::before {
+      transform: rotate(90deg);
+    }
+
+    .session-details p {
+      margin: 10px 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .session-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .session-actions button {
+      flex: 1;
+      min-height: 36px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--fill);
+      color: var(--ink);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .session-actions button:last-child {
+      color: var(--danger);
+    }
+
+    .identity-details {
+      margin-top: 10px;
+      color: inherit;
+      font-size: 13px;
+    }
+
+    .identity-details summary {
+      cursor: pointer;
+      opacity: 0.7;
+      list-style: none;
+    }
+
+    .identity-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .identity-details .desc {
+      margin-top: 8px;
+    }
+
+    .import-row {
+      margin-bottom: 16px;
+    }
+
+    .import-row button {
+      width: 100%;
+      min-height: 48px;
+      border: 0;
+      border-radius: var(--r-btn);
+      background: var(--fill);
+      color: var(--ink);
+      font: inherit;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    /* ---------- 从角色卡导入的弹层 ---------- */
+
+    .picker-sheet {
+      padding: 10px 20px calc(26px + var(--safe));
+      border-radius: var(--r-sheet) var(--r-sheet) 0 0;
+      background: var(--bg-elevated);
+    }
+
+    .picker-toolbar {
+      margin-bottom: 14px;
+    }
+
+    .picker-toolbar button {
+      width: 100%;
+      min-height: 42px;
+      border: 0;
+      border-radius: 12px;
+      background: var(--fill);
+      color: var(--ink-soft);
+      font: inherit;
+      font-size: 13px;
+    }
+
+    .picker-world {
+      margin-bottom: 18px;
+    }
+
+    .picker-world h3 {
+      margin: 0 0 10px;
+      font-size: 15px;
+      font-weight: 650;
+    }
+
+    .picker-label {
+      margin: 12px 4px 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .picker-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      border: 0;
+      border-radius: 14px;
+      background: var(--card);
+      color: var(--ink);
+      font: inherit;
+      text-align: left;
+    }
+
+    .picker-avatar {
+      width: 40px;
+      height: 40px;
+      flex: 0 0 auto;
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--fill);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .picker-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .picker-name {
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .picker-desc {
+      margin-top: 2px;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .picker-close {
+      width: 100%;
+      min-height: 48px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: var(--r-btn);
+      background: var(--accent);
+      color: var(--accent-ink);
+      font: inherit;
+      font-size: 16px;
+      font-weight: 590;
+    }
+  </style>
+
+</head>
+<body>
+  <header>
+    <button class="back" onclick="nocturneBack()" type="button">‹</button>
+    <h1>选择你的身份</h1>
+  </header>
+
+  <p class="tip">选择一个身份进入故事。姓名和身份必填，其他内容可以留空或编辑。</p>
+
+  <div id="existingSessions"></div>
+
+  <div class="session-section-title">新建身份</div>
+  <div class="identity-list" id="identityList">加载中...</div>
+
+  <button class="add-btn" onclick="openIdentityModal(-1)" type="button">+ 添加身份卡</button>
+
+  <div class="confirm-bar">
+    <button onclick="confirmIdentity()" type="button">已确认，进入故事</button>
+    <button class="ghost" onclick="startGodMode()" type="button">上帝视角进入（不选身份）</button>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal">
+      <h2 id="modalTitle">添加身份</h2>
+
+      <form id="identityForm">
+        <div class="import-row">
+          <button type="button" onclick="openIdentityPicker()">从已有角色 / 用户设定选择</button>
+        </div>
+
+        <div class="field">
+          <label>姓名</label>
+          <input id="identityName" required>
+        </div>
+
+        <div class="field">
+          <label>身份</label>
+          <input id="identityRole" required>
+        </div>
+
+        <div class="field">
+          <label>描述</label>
+          <textarea id="identityDesc"></textarea>
+        </div>
+
+        <div class="modal-actions">
+          <button type="submit">保存身份</button>
+          <button class="ghost" onclick="closeIdentityModal()" type="button">取消</button>
+        </div>
+
+        <div id="status">等待操作。</div>
+      </form>
+    </div>
+  </div>
+
+  <div class="picker-backdrop" id="pickerBackdrop">
+    <div class="picker-sheet">
+      <div class="sheet-handle"></div>
+      <h2>选择已有设定</h2>
+
+      <div class="picker-toolbar">
+        <button id="pickerWorldToggle" type="button" onclick="togglePickerWorlds()">
+          显示其他世界观
+        </button>
+      </div>
+
+      <div id="pickerList">加载中...</div>
+
+      <button class="picker-close" type="button" onclick="closeIdentityPicker()">
+        关闭
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const scriptId = params.get('script');
+
+    let currentScript = null;
+    let selectedIndex = -1;
+    let editingIndex = -1;
+
+    function escapeHtml(text) {
+      return String(text || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+
+    async function loadScript() {
+      if (!scriptId) {
+        location.href = '/theater.html';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/theater/scripts/' + scriptId);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '剧本不存在');
+        }
+
+        currentScript = data;
+
+        if (!Array.isArray(currentScript.identities)) {
+          currentScript.identities = [];
+        }
+
+        renderIdentities();
+      } catch (error) {
+        alert('加载失败：' + error.message);
+        location.href = '/theater.html';
+      }
+    }
+
+    function renderIdentities() {
+      const list = document.getElementById('identityList');
+
+      if (!currentScript.identities.length) {
+        list.innerHTML =
+          '<div class="tip">还没有身份卡，点下面“添加身份卡”。</div>';
+        return;
+      }
+
+      list.innerHTML = currentScript.identities.map((item, index) => `
+        <div
+          class="identity-card ${selectedIndex === index ? 'selected' : ''}"
+          onclick="selectIdentity(${index})"
+        >
+          <button
+            class="edit-btn"
+            onclick="event.stopPropagation(); openIdentityModal(${index})"
+            type="button"
+          >✎</button>
+          <h2>${escapeHtml(item.name || '未命名')}</h2>
+          <p class="role">${escapeHtml(item.role || '')}</p>
+          ${item.desc ? `
+          <details class="identity-details" onclick="event.stopPropagation()">
+            <summary>展开描述</summary>
+            <p class="desc">${escapeHtml(item.desc || '')}</p>
+          </details>
+          ` : ''}
+        </div>
+      `).join('');
+    }
+
+    function selectIdentity(index) {
+      selectedIndex = Number(index);
+      renderIdentities();
+    }
+
+    function openIdentityModal(index) {
+      editingIndex = Number(index);
+
+      if (editingIndex >= 0) {
+        const item = currentScript.identities[editingIndex];
+        document.getElementById('modalTitle').textContent = '编辑身份';
+        document.getElementById('identityName').value = item.name || '';
+        document.getElementById('identityRole').value = item.role || '';
+        document.getElementById('identityDesc').value = item.desc || '';
+      } else {
+        document.getElementById('modalTitle').textContent = '添加身份';
+        document.getElementById('identityForm').reset();
+      }
+
+      document.getElementById('status').textContent = '等待操作。';
+      document.getElementById('modalBackdrop').classList.add('open');
+    }
+
+    function closeIdentityModal() {
+      document.getElementById('modalBackdrop').classList.remove('open');
+    }
+
+    async function saveScript() {
+      const payload = {
+        title: currentScript.title,
+        subtitle: currentScript.subtitle,
+        premise: currentScript.premise,
+        opening: currentScript.opening,
+        rules: currentScript.rules,
+        cast_ids: currentScript.cast_ids || [],
+        identities: currentScript.identities || []
+      };
+
+      const response = await fetch('/api/theater/scripts/' + scriptId, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || '保存失败');
+      }
+
+      currentScript = data.script;
+
+      if (!Array.isArray(currentScript.identities)) {
+        currentScript.identities = [];
+      }
+    }
+
+    document.getElementById('identityForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+
+      const item = {
+        name: document.getElementById('identityName').value.trim(),
+        role: document.getElementById('identityRole').value.trim(),
+        desc: document.getElementById('identityDesc').value.trim()
+      };
+
+      if (!item.name || !item.role) {
+        document.getElementById('status').textContent = '姓名和身份必填';
+        return;
+      }
+
+      try {
+        document.getElementById('status').textContent = '保存中...';
+
+        if (editingIndex >= 0) {
+          currentScript.identities[editingIndex] = item;
+        } else {
+          currentScript.identities.push(item);
+          selectedIndex = currentScript.identities.length - 1;
+        }
+
+        await saveScript();
+        closeIdentityModal();
+        renderIdentities();
+      } catch (error) {
+        document.getElementById('status').textContent =
+          '保存失败：' + error.message;
+      }
+    });
+
+    // 上帝视角：不选身份，像看小说一样旁观并替主角选择
+    async function startGodMode() {
+      if (!currentScript) {
+        alert('剧本还没加载完');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/theater/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            script_id: Number(scriptId),
+            god_mode: true
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '创建失败');
+        }
+
+        location.href = '/theater-play.html?session=' + data.session.id;
+      } catch (error) {
+        alert('创建失败：' + error.message);
+      }
+    }
+
+    async function confirmIdentity() {
+      if (selectedIndex < 0 || !currentScript || !currentScript.identities[selectedIndex]) {
+        alert('先选择一个身份');
+        return;
+      }
+
+      const identity = currentScript.identities[selectedIndex];
+
+      try {
+        const response = await fetch('/api/theater/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            script_id: Number(scriptId),
+            identity_name: identity.name,
+            identity_role: identity.role,
+            identity_desc: identity.desc || '',
+            identity_avatar: ''
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '创建失败');
+        }
+
+        location.href = '/theater-play.html?session=' + data.session.id;
+      } catch (error) {
+        alert('创建失败：' + error.message);
+      }
+    }
+
+    document.getElementById('modalBackdrop').addEventListener('click', (event) => {
+      if (event.target === document.getElementById('modalBackdrop')) {
+        closeIdentityModal();
+      }
+    });
+
+    let identityOptions = null;
+    let activeWorldId = null;
+    let showAllWorlds = false;
+
+    async function ensureIdentityOptions() {
+      if (identityOptions && activeWorldId) return;
+
+      const [optionsRes, activeRes] = await Promise.all([
+        fetch('/api/identity-options'),
+        fetch('/api/worlds/active')
+      ]);
+
+      identityOptions = await optionsRes.json();
+      const active = await activeRes.json();
+      activeWorldId = active.id;
+    }
+
+    async function openIdentityPicker() {
+      try {
+        await ensureIdentityOptions();
+        renderIdentityPicker();
+        document.getElementById('pickerBackdrop').classList.add('open');
+      } catch (error) {
+        alert('加载设定失败：' + error.message);
+      }
+    }
+
+    function closeIdentityPicker() {
+      document.getElementById('pickerBackdrop').classList.remove('open');
+    }
+
+    function togglePickerWorlds() {
+      showAllWorlds = !showAllWorlds;
+      document.getElementById('pickerWorldToggle').textContent =
+        showAllWorlds ? '只看当前世界观' : '显示其他世界观';
+      renderIdentityPicker();
+    }
+
+    function renderPickerAvatar(item) {
+      if (item.avatar) {
+        return '<img src="' + escapeHtml(item.avatar) + '" alt="">';
+      }
+      return escapeHtml(String(item.name || '?').slice(0, 1));
+    }
+
+    function renderIdentityPicker() {
+      const list = document.getElementById('pickerList');
+      const worlds = showAllWorlds
+        ? identityOptions
+        : identityOptions.filter((world) => Number(world.id) === Number(activeWorldId));
+
+      const html = worlds.map((world) => {
+        if (!world.characters.length && !world.personas.length) return '';
+
+        const personas = world.personas.length
+          ? `
+            <div class="picker-label">用户设定</div>
+            ${world.personas.map((item) => `
+              <button
+                class="picker-item"
+                onclick="pickIdentity('persona', ${world.id}, ${item.id})"
+                type="button"
+              >
+                <span class="picker-avatar">${renderPickerAvatar(item)}</span>
+                <span>
+                  <span class="picker-name">${escapeHtml(item.name)}</span>
+                  <span class="picker-desc">${escapeHtml(item.bio || item.persona || '')}</span>
+                </span>
+              </button>
+            `).join('')}
+          `
+          : '';
+
+        const characters = world.characters.length
+          ? `
+            <div class="picker-label">角色</div>
+            ${world.characters.map((item) => `
+              <button
+                class="picker-item"
+                onclick="pickIdentity('character', ${world.id}, ${item.id})"
+                type="button"
+              >
+                <span class="picker-avatar">${renderPickerAvatar(item)}</span>
+                <span>
+                  <span class="picker-name">${escapeHtml(item.name)}</span>
+                  <span class="picker-desc">${escapeHtml(item.handle || item.personality || item.persona || '')}</span>
+                </span>
+              </button>
+            `).join('')}
+          `
+          : '';
+
+        return `
+          <section class="picker-world">
+            <h3>${escapeHtml(world.name)}</h3>
+            ${personas}
+            ${characters}
+          </section>
+        `;
+      }).join('');
+
+      list.innerHTML = html || '<div class="tip">没有可选择的设定。</div>';
+    }
+
+    function pickIdentity(kind, worldId, id) {
+      const world = identityOptions.find(
+        (item) => Number(item.id) === Number(worldId)
+      );
+
+      if (!world) return;
+
+      let name = '';
+      let role = '';
+      let desc = '';
+
+      if (kind === 'persona') {
+        const item = world.personas.find(
+          (entry) => Number(entry.id) === Number(id)
+        );
+        if (!item) return;
+
+        name = item.name;
+        role = '用户设定';
+        desc = item.bio || item.persona || '';
+      } else {
+        const item = world.characters.find(
+          (entry) => Number(entry.id) === Number(id)
+        );
+        if (!item) return;
+
+        name = item.name;
+        role = item.handle || '角色';
+        desc = [item.personality, item.background, item.persona]
+          .filter(Boolean)
+          .join('\n\n');
+      }
+
+      document.getElementById('identityName').value = name;
+      document.getElementById('identityRole').value = role;
+      document.getElementById('identityDesc').value = desc;
+
+      closeIdentityPicker();
+    }
+
+    document.getElementById('pickerBackdrop').addEventListener('click', (event) => {
+      if (event.target === document.getElementById('pickerBackdrop')) {
+        closeIdentityPicker();
+      }
+    });
+
+    function formatSessionTime(value) {
+      if (!value) return '';
+      const normalized = String(value).replace(' ', 'T');
+      const date = new Date(
+        normalized.endsWith('Z') ? normalized : normalized + 'Z'
+      );
+      if (Number.isNaN(date.getTime())) return '';
+
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const diff = Math.round((today - day) / 86400000);
+
+      if (diff === 0) return '今天';
+      if (diff === 1) return '昨天';
+
+      return (date.getMonth() + 1) + '月' + date.getDate() + '日';
+    }
+
+    async function renameSession(id) {
+      const title = prompt('给这段剧情取一个小名字');
+      if (!title) return;
+
+      try {
+        const response = await fetch('/api/theater/sessions/' + id, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '重命名失败');
+        }
+
+        await loadExistingSessions();
+      } catch (error) {
+        alert('重命名失败：' + error.message);
+      }
+    }
+
+    async function deleteSession(id) {
+      if (!confirm('删除这段剧情？删除后无法恢复。')) return;
+
+      try {
+        const response = await fetch('/api/theater/sessions/' + id, {
+          method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '删除失败');
+        }
+
+        await loadExistingSessions();
+      } catch (error) {
+        alert('删除失败：' + error.message);
+      }
+    }
+
+    function continueSession(id) {
+      location.href = '/theater-play.html?session=' + id;
+    }
+
+    async function loadExistingSessions() {
+      if (!scriptId) return;
+
+      try {
+        const response = await fetch(
+          '/api/theater/scripts/' + scriptId + '/sessions'
+        );
+
+        const rows = await response.json();
+        const container = document.getElementById('existingSessions');
+
+        if (!response.ok || !rows.length) {
+          container.innerHTML = '';
+          return;
+        }
+
+        container.innerHTML = `
+          <div class="session-section-title">选择以前的剧情</div>
+          ${rows.map((row) => `
+            <div class="session-card">
+              <div class="session-head" onclick="continueSession(${row.id})">
+                <div class="session-title">${escapeHtml(row.title || '未命名剧情')}</div>
+                <div class="session-sub">
+                  ${escapeHtml(row.identity_name || '未命名身份')} ·
+                  ${escapeHtml(formatSessionTime(row.updated_at || row.created_at))}
+                </div>
+              </div>
+
+              <details class="session-details" onclick="event.stopPropagation()">
+                <summary>详情 / 操作</summary>
+                <p>${escapeHtml(row.last_content || '还没有剧情内容')}</p>
+                <div class="session-actions">
+                  <button onclick="continueSession(${row.id})" type="button">继续</button>
+                  <button onclick="renameSession(${row.id})" type="button">重命名</button>
+                  <button onclick="deleteSession(${row.id})" type="button">删除</button>
+                </div>
+              </details>
+            </div>
+          `).join('')}
+        `;
+      } catch (e) {
+        document.getElementById('existingSessions').innerHTML = '';
+      }
+    }
+
+    loadScript();
+    loadExistingSessions();
+  </script>
+  <script src="/back-nav.js"></script>
+</body>
+</html>

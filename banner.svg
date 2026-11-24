@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="Nocturne">
+  <rect width="1200" height="300" fill="#F2F2F7"/>
+  <g fill="#111111">
+    <rect x="72" y="96" width="44" height="32" rx="10"/>
+    <rect x="80" y="104" width="16" height="3" rx="1.5" fill="#F2F2F7"/>
+    <rect x="80" y="113" width="11" height="3" rx="1.5" fill="#F2F2F7"/>
+  </g>
+  <text x="72" y="182" font-family="Helvetica Neue, Helvetica, Arial, PingFang SC, sans-serif" font-size="64" font-weight="600" fill="#111111">Nocturne</text>
+  <text x="72" y="222" font-family="Helvetica Neue, Helvetica, Arial, PingFang SC, sans-serif" font-size="22" fill="#6B6B70">跑在自己手机上的 AI 角色聊天应用</text>
+  <g fill="#C9C9CE">
+    <circle cx="1050" cy="150" r="78" fill="none" stroke="#DCDCE1" stroke-width="2"/>
+    <circle cx="1050" cy="150" r="54" fill="none" stroke="#E4E4E8" stroke-width="2"/>
+  </g>
+</svg>

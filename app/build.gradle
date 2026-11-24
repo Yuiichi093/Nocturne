@@ -1,0 +1,83 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.huaxueyi.rolephone'
+    compileSdk 34
+    ndkVersion '26.1.10909125'
+
+    defaultConfig {
+        applicationId 'com.huaxueyi.rolephone'
+        minSdk 26
+        targetSdk 34
+        versionCode 22
+        versionName '1.2.17'
+
+        ndk {
+            // 只打 arm64-v8a：现在的中低端手机都是 64 位，多两个架构会让安装包大两倍多
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                // libnode.so 是用 libc++ 编译的，必须用共享 STL
+                arguments '-DANDROID_STL=c++_shared'
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            // 密钥文件不进仓库：CI 里由 secret 解出来放在 android/app/release.keystore
+            def ksPath = System.getenv('ROLEPHONE_KEYSTORE')
+            def ksPass = System.getenv('ROLEPHONE_KEYSTORE_PASSWORD')
+            if (ksPass) {
+                storeFile file(ksPath ?: 'release.keystore')
+                storeType 'PKCS12'
+                storePassword ksPass
+                keyAlias System.getenv('ROLEPHONE_KEY_ALIAS') ?: 'nocturne'
+                keyPassword System.getenv('ROLEPHONE_KEY_PASSWORD') ?: ksPass
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // 没配密钥时仍然能编（未签名的包，装不了，只用来验证编译）
+            def ksPass = System.getenv('ROLEPHONE_KEYSTORE_PASSWORD')
+            if (ksPass) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    // libnode.so 是按架构放进 jniLibs 的
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libnode/bin']
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+// 把仓库里的 JS 应用搬进 assets，APK 启动后先解出来再跑
+tasks.register('stageNodeProject', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'node', 'prepare-assets.js'
+}
+
+preBuild.dependsOn('stageNodeProject')

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Nocturne · 备份与恢复</title>
+  <script src="/auth-guard.js"></script>
+  <style>
+    :root {
+      --bg: #f7f7f7;
+      --ink: #111;
+      --muted: #777;
+      --line: rgba(0,0,0,.1);
+      --card: #fff;
+      --safe: env(safe-area-inset-bottom, 0px);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      padding: 18px 18px calc(30px + var(--safe));
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Noto Sans SC", "PingFang SC", sans-serif;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .back {
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: transparent;
+      color: var(--ink);
+      font-size: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      font-weight: 500;
+    }
+
+    .card {
+      padding: 18px;
+      margin-bottom: 14px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--card);
+    }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .card p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.8;
+    }
+
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      border: 1px solid var(--ink);
+      border-radius: 15px;
+      background: var(--ink);
+      color: var(--bg);
+      font: inherit;
+      text-align: center;
+      text-decoration: none;
+    }
+
+    .btn.ghost {
+      background: transparent;
+      color: var(--ink);
+      margin-top: 10px;
+    }
+
+    #restoreFile {
+      display: none;
+    }
+
+    #status {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(0,0,0,.05);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <button class="back" onclick="nocturneBack()" type="button">‹</button>
+    <h1>备份与恢复</h1>
+  </header>
+
+  <div class="card">
+    <h2>下载备份</h2>
+    <p>备份包含 SQLite 数据库和所有上传图片。建议定期下载保存。</p>
+    <p class="sub">
+      默认<strong>不包含 API Key</strong>：备份文件会存到手机的「下载」目录，
+      那里别的 App 也能读，所以不该把密钥一起放进去。恢复后到「模型设置」重新填一次就行。
+    </p>
+    <div class="row" style="display:flex;align-items:center;justify-content:space-between;margin:10px 0;">
+      <span>连 API Key 一起备份（不推荐）</span>
+      <input id="withKeys" type="checkbox">
+    </div>
+    <a class="btn" id="downloadBtn" href="/api/backup/download">下载备份文件</a>
+  </div>
+
+  <div class="card">
+    <h2>恢复备份</h2>
+    <p>选择之前下载的 `.tar.gz` 备份文件。恢复时服务会重启，请等几秒后刷新页面。</p>
+    <button class="btn" id="restoreBtn" type="button">选择备份文件</button>
+    <input id="restoreFile" type="file" accept=".gz,.tar.gz,application/gzip">
+    <div id="status">等待操作。</div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    $('withKeys').addEventListener('change', () => {
+      $('downloadBtn').href = '/api/backup/download' +
+        ($('withKeys').checked ? '?with_keys=1' : '');
+    });
+
+    $('restoreBtn').addEventListener('click', () => {
+      $('restoreFile').click();
+    });
+
+    $('restoreFile').addEventListener('change', async () => {
+      const file = $('restoreFile').files && $('restoreFile').files[0];
+      if (!file) return;
+
+      if (!confirm('恢复会覆盖当前数据库和图片，确定继续？')) {
+        $('restoreFile').value = '';
+        return;
+      }
+
+      try {
+        $('status').textContent = '上传备份中...';
+
+        const formData = new FormData();
+        formData.append('backup', file);
+
+        const response = await fetch('/api/backup/restore', {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '恢复失败');
+        }
+
+        $('status').textContent =
+          '备份已上传，正在恢复并重启服务。5 秒后自动回首页...';
+
+        setTimeout(() => {
+          location.href = '/';
+        }, 5000);
+      } catch (error) {
+        $('status').textContent = '恢复失败：' + error.message;
+      }
+
+      $('restoreFile').value = '';
+    });
+  </script>
+  <script src="/back-nav.js"></script>
+</body>
+</html>
