@@ -65,6 +65,7 @@ require('./usage-api')(app, db);
 require('./theater-api')(app, db);
 require('./theater-play-api')(app, db);
 require('./theater-extra-api')(app, db);
+require('./theater-recover-api')(app, db);
 require('./moment-api')(app, db);
 require('./world-api')(app, db);
 require('./worldbook-api')(app, db);

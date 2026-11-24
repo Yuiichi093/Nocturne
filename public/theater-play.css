@@ -328,6 +328,41 @@ html[data-theme="dark"] .play-header {
   background: var(--fill);
 }
 
+/* 历史步骤的选项：不能直接选，去掉箭头、灰一点，点了只出一行小字 */
+.option-item.is-locked {
+  color: var(--muted);
+}
+
+.option-item.is-locked::after {
+  content: "";
+}
+
+.options-hint {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.options-hint[hidden] {
+  display: none;
+}
+
+/* 历史步骤的卡片比最新一步轻一点，别喧宾夺主 */
+.options-card.is-history {
+  margin: 20px 0 6px;
+  padding: 14px 18px 12px;
+  background: var(--fill);
+  box-shadow: none;
+}
+
+.options-card.is-history .options-head h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .option-custom {
   width: 100%;
   min-height: 46px;

@@ -14,10 +14,16 @@
   let script = null;
   let messages = [];
   let cast = [];
-  let currentOptions = [];
-  let optionVersions = [];      // 当前这段旁白的全部选项版本
-  let optionVersionIndex = 0;   // 正在看第几版（0 起）
-  let optionNarrationId = 0;    // 这些版本属于哪段旁白
+  let currentOptions = [];      // 最新一步当前这一版的选项（点选项推进剧情用）
+  let stepVersions = {};        // narrationId -> 该步骤的全部选项版本（options/all 一次拿全）
+  let stepIndex = {};           // narrationId -> 该步骤正在看第几版（0 起）
+  let optionVersions = [];      // 最新一步的版本数组（兼容老逻辑：换一批 / 撤回）
+  let optionVersionIndex = 0;
+  let optionNarrationId = 0;    // 最新一段旁白（⟲ 换一批只作用于它）
+  let latestStepKey = '';
+  let latestNarrationId = 0;
+  let lastOptionsRowId = 0;
+  let cardElements = {};        // narrationId -> 卡片 DOM，翻页/重绘用
   let sending = false;
   let drawing = false;
 
@@ -197,6 +203,47 @@
     return true;
   }
 
+  // 一次拿全会话所有步骤的选项版本，存成 { narrationId: [versions] }。
+  // 之后切步骤、翻版本都不再发请求；接口挂了就退回每条消息自带的 meta.options。
+  async function loadStepVersions(preserveIndex) {
+    let groups = [];
+
+    try {
+      const response = await fetch(
+        '/api/theater/sessions/' + sessionId + '/options/all'
+      );
+
+      if (response.ok) {
+        const data = await response.json().catch(() => ({}));
+        groups = Array.isArray(data.groups) ? data.groups : [];
+      }
+    } catch (error) {
+      groups = [];
+    }
+
+    const nextVersions = {};
+    const nextIndex = {};
+
+    groups.forEach((group) => {
+      const narrationId = Number(group.narration_id) || 0;
+      const list = Array.isArray(group.versions) ? group.versions : [];
+
+      if (!narrationId || !list.length) return;
+
+      const key = String(narrationId);
+      nextVersions[key] = list;
+
+      const old = preserveIndex ? Number(stepIndex[key]) : NaN;
+      nextIndex[key] =
+        Number.isInteger(old) && old >= 0 && old < list.length
+          ? old
+          : list.length - 1;
+    });
+
+    stepVersions = nextVersions;
+    stepIndex = nextIndex;
+  }
+
   async function loadMessages(keepVersionId) {
     let rows;
 
@@ -218,85 +265,58 @@
 
     messages = Array.isArray(rows) ? rows : [];
 
-    optionVersions = [];
-    optionVersionIndex = 0;
-    optionNarrationId = 0;
+    await loadStepVersions(false);
 
-    // 最后一批选项属于哪段旁白，就去把那段旁白的所有版本拿回来（一次请求，翻页不再发）
-    let lastOptions = null;
+    // 编辑保存后回到改过的那一版（跨步骤找这一版属于哪段旁白）
+    if (keepVersionId) {
+      Object.keys(stepVersions).forEach((key) => {
+        const index = stepVersions[key].findIndex(
+          (version) => Number(version.id) === Number(keepVersionId)
+        );
 
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === 'options') {
-        lastOptions = messages[i];
-        break;
-      }
-    }
-
-    if (lastOptions) {
-      const lastOptionsMeta = parseJson(lastOptions.meta_json, {});
-
-      // 优先按位置找（最后一段旁白的 id）。分支会话是从别的会话复制过来的，
-      // meta 里的 narration_id 还是原会话的 id，照着用会查不到，翻页和「换一批」都会失灵。
-      let narrationId = 0;
-
-      for (let i = messages.length - 1; i >= 0; i -= 1) {
-        if (messages[i].role === 'narration') {
-          narrationId = Number(messages[i].id);
-          break;
-        }
-      }
-
-      if (!narrationId) {
-        narrationId = Number(lastOptionsMeta.narration_id) || 0;
-      }
-
-      if (narrationId) {
-        optionNarrationId = narrationId;
-
-        try {
-          const versionResponse = await fetch(
-            '/api/theater/sessions/' + sessionId +
-            '/options?narration_id=' + narrationId
-          );
-
-          if (versionResponse.ok) {
-            const versionData = await versionResponse.json();
-
-            if (versionData && Array.isArray(versionData.versions)) {
-              optionVersions = versionData.versions;
-            }
-          }
-        } catch (error) {
-          // 版本接口挂了别挡住剧情，下面会用消息里那一条兜底
-        }
-      }
-
-      const keepIndex = optionVersions.findIndex(
-        (version) => Number(version.id) === Number(keepVersionId)
-      );
-
-      optionVersionIndex = keepIndex >= 0
-        ? keepIndex
-        : Math.max(optionVersions.length - 1, 0);
+        if (index >= 0) stepIndex[key] = index;
+      });
     }
 
     renderStory();
     return true;
   }
 
-  function renderStory() {
+  // 每一步的当前版本；没有版本数据时用消息里自带的 meta.options 兜底
+  function versionsOfStep(key, metaOptions, fallbackId) {
+    const stored = stepVersions[String(key)];
+
+    if (stored && stored.length) return stored;
+
+    return [{
+      id: Number(fallbackId) || 0,
+      options: Array.isArray(metaOptions) ? metaOptions : [],
+      version: 1,
+      created_at: '',
+      source: '',
+      edited_at: ''
+    }];
+  }
+
+  function stepIndexOf(key, total) {
+    const k = String(key);
+    let index = Number(stepIndex[k]);
+
+    if (!Number.isInteger(index) || index < 0 || index >= total) {
+      index = Math.max(total - 1, 0);
+    }
+
+    stepIndex[k] = index;
+    return index;
+  }
+
+  // 每个 role='options' 的消息都渲染成完整卡片（历史步骤也带胶囊 / ✎ / 🗑 / 开分支）；
+  // 同一段旁白的多版只画一张卡，显示 stepIndex 指定的那一版。
+  function renderStory(options) {
     const story = $('story');
     story.innerHTML = '';
     currentOptions = [];
-
-    let lastOptionsId = null;
-
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === 'options') {
-        lastOptionsId = messages[i].id;
-        break;
-      }
-    }
+    cardElements = {};
 
     if (!messages.length) {
       const empty = document.createElement('div');
@@ -305,6 +325,35 @@
       story.appendChild(empty);
       return;
     }
+
+    // 先按位置把每条 options 行归到它前面的那段旁白。
+    // 不能信 meta.narration_id：分支会话是复制来的，里面的 id 还是原会话的。
+    const representativeOfStep = {};
+    const narrationIdOfRow = {};
+    let currentNarration = 0;
+    let lastOptionRow = 0;
+
+    messages.forEach((message) => {
+      if (message.role === 'narration') {
+        currentNarration = Number(message.id) || 0;
+        return;
+      }
+
+      if (message.role !== 'options') return;
+
+      const rowId = Number(message.id);
+      narrationIdOfRow[rowId] = currentNarration;
+      lastOptionRow = rowId;
+
+      const key = currentNarration ? String(currentNarration) : String(rowId);
+      representativeOfStep[key] = message;
+    });
+
+    latestNarrationId = narrationIdOfRow[lastOptionRow] || 0;
+    latestStepKey = latestNarrationId
+      ? String(latestNarrationId)
+      : String(lastOptionRow);
+    lastOptionsRowId = lastOptionRow;
 
     messages.forEach((message) => {
       if (message.role === 'narration') {
@@ -396,163 +445,257 @@
       }
 
       if (message.role === 'options') {
-        if (Number(message.id) !== Number(lastOptionsId)) return;
+        const rowId = Number(message.id);
+        const narrationId = narrationIdOfRow[rowId] || 0;
+        const key = narrationId ? String(narrationId) : String(rowId);
+        const representative = representativeOfStep[key];
 
-        const meta = parseJson(message.meta_json, {});
+        // 同一段旁白只在它最后一行 options 的位置画一张卡，旧版本行不再单独出卡
+        if (!representative || Number(representative.id) !== rowId) return;
 
-        // 版本接口没回数据（老数据 / 断网）时，用消息里自带的这一批兜底
-        if (!optionVersions.length) {
-          optionVersions = [{
-            id: Number(message.id),
-            options: Array.isArray(meta.options) ? meta.options : [],
-            version: Number(meta.version) || 1,
-            source: String(meta.source || '')
-          }];
-          optionVersionIndex = 0;
-        }
-
-        if (optionVersionIndex >= optionVersions.length) {
-          optionVersionIndex = optionVersions.length - 1;
-        }
-
-        const card = document.createElement('div');
-        card.className = 'options-card';
-
-        // 版本翻页条：‹ 3/5 ›（只有一版时整条隐藏）
-        const pager = document.createElement('div');
-        pager.className = 'options-pager';
-        pager.id = 'optionsPager';
-
-        const prevButton = document.createElement('button');
-        prevButton.id = 'optionsPrevBtn';
-        prevButton.className = 'options-pager-arrow';
-        prevButton.type = 'button';
-        prevButton.title = '上一版选项';
-        prevButton.textContent = '‹';
-
-        const pagerLabel = document.createElement('span');
-        pagerLabel.id = 'optionsPagerLabel';
-        pagerLabel.className = 'options-pager-label';
-
-        const nextButton = document.createElement('button');
-        nextButton.id = 'optionsNextBtn';
-        nextButton.className = 'options-pager-arrow';
-        nextButton.type = 'button';
-        nextButton.title = '下一版选项';
-        nextButton.textContent = '›';
-
-        pager.appendChild(prevButton);
-        pager.appendChild(pagerLabel);
-        pager.appendChild(nextButton);
-        card.appendChild(pager);
-
-        const head = document.createElement('div');
-        head.className = 'options-head';
-
-        const heading = document.createElement('h2');
-        heading.textContent = '下一步';
-
-        const actions = document.createElement('div');
-        actions.className = 'options-head-actions';
-
-        [
-          { id: 'rollbackBtn', title: '撤回上一步', text: '↩' },
-          { id: 'regenerateBtn', title: '换一批选项', text: '⟲' },
-          { id: 'editOptionsBtn', title: '编辑这一版', text: '✎' },
-          { id: 'deleteOptionsBtn', title: '删除这一版', text: '🗑' }
-        ].forEach((def) => {
-          const button = document.createElement('button');
-          button.id = def.id;
-          button.type = 'button';
-          button.title = def.title;
-          button.textContent = def.text;
-          actions.appendChild(button);
-        });
-
-        head.appendChild(heading);
-        head.appendChild(actions);
-        card.appendChild(head);
-
-        const list = document.createElement('div');
-        list.className = 'options-list';
-        list.id = 'optionsList';
-        card.appendChild(list);
-
-        const customButton = document.createElement('button');
-        customButton.className = 'option-custom';
-        customButton.id = 'customActionBtn';
-        customButton.type = 'button';
-        customButton.textContent = '自定义行动';
-        card.appendChild(customButton);
-
-        const directionButton = document.createElement('button');
-        directionButton.className = 'option-custom ghost' + (getDirection() ? ' has-value' : '');
-        directionButton.id = 'directionChipBtn';
-        directionButton.type = 'button';
-        directionButton.textContent = getDirection()
-          ? '剧情走向：已设置（点击修改）'
-          : '设置剧情走向';
-        card.appendChild(directionButton);
-
-        const branchButton = document.createElement('button');
-        branchButton.className = 'option-branch';
-        branchButton.id = 'branchFromVersionBtn';
-        branchButton.type = 'button';
-        branchButton.textContent = '从这一版开分支';
-        card.appendChild(branchButton);
-
-        story.appendChild(card);
-        syncOptionsView();
+        buildOptionsCard(story, key, narrationId, message);
       }
     });
 
-    scrollToBottom();
+    // 初次渲染 / 追加剧情后贴底；就地重绘（编辑、删除）不走这里，省得把用户拽走
+    if (!(options && options.noScroll)) scrollToBottom();
   }
 
-  // 把当前这一版选项铺到卡片上：翻页、编辑、删除后都只走这里，不发请求
-  function syncOptionsView() {
-    const list = $('optionsList');
-    if (!list) return;
+  function makeStepButton(text, action, key, title, id) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = text;
+    button.title = title;
+    button.dataset.stepAction = action;
+    button.dataset.stepKey = String(key);
+    button.className = action === 'prev' || action === 'next'
+      ? 'options-pager-arrow'
+      : 'options-icon';
+    if (id) button.id = id;
+    return button;
+  }
 
-    const total = optionVersions.length;
-    const active = optionVersions[optionVersionIndex] || null;
+  function buildOptionsCard(story, key, narrationId, message) {
+    const meta = parseJson(message.meta_json, {});
+    const versions = versionsOfStep(key, meta.options, message.id);
+    const isLatest = key === latestStepKey;
 
-    list.innerHTML = '';
-    currentOptions = active && Array.isArray(active.options)
-      ? active.options.slice()
-      : [];
+    const card = document.createElement('div');
+    card.className = 'options-card' + (isLatest ? '' : ' is-history');
+    card.dataset.stepCard = String(key);
+    card.dataset.narrationId = String(narrationId || 0);
+    card.dataset.stepOptionsId = String(message.id);
 
-    currentOptions.forEach((option, index) => {
+    card._step = {
+      key: String(key),
+      narrationId: Number(narrationId) || 0,
+      versions,
+      isLatest,
+      activeId: 0
+    };
+    card._refs = {};
+
+    // 版本翻页条：‹ 3/5 ›（只有一版时整条隐藏）
+    const pager = document.createElement('div');
+    pager.className = 'options-pager';
+
+    const prev = makeStepButton('‹', 'prev', key, '上一版选项', isLatest ? 'optionsPrevBtn' : '');
+    const label = document.createElement('span');
+    label.className = 'options-pager-label';
+    if (isLatest) label.id = 'optionsPagerLabel';
+    const next = makeStepButton('›', 'next', key, '下一版选项', isLatest ? 'optionsNextBtn' : '');
+
+    pager.appendChild(prev);
+    pager.appendChild(label);
+    pager.appendChild(next);
+    if (isLatest) pager.id = 'optionsPager';
+    card._refs.pager = pager;
+    card._refs.prev = prev;
+    card._refs.next = next;
+    card._refs.label = label;
+    card.appendChild(pager);
+
+    // 头部：标题 + 操作按钮（撤回 / 换一批只有最新一步才有）
+    const head = document.createElement('div');
+    head.className = 'options-head';
+
+    const heading = document.createElement('h2');
+    heading.textContent = isLatest ? '下一步' : '当时的选项';
+
+    const actions = document.createElement('div');
+    actions.className = 'options-head-actions';
+
+    if (isLatest) {
+      const rollback = makeStepButton('↩', 'rollback', key, '撤回上一步', 'rollbackBtn');
+      const regenerate = makeStepButton('⟲', 'regenerate', key, '换一批选项', 'regenerateBtn');
+      actions.appendChild(rollback);
+      actions.appendChild(regenerate);
+    }
+
+    const edit = makeStepButton('✎', 'edit', key, '编辑这一版', isLatest ? 'editOptionsBtn' : '');
+    const remove = makeStepButton('🗑', 'delete', key, '删除这一版', isLatest ? 'deleteOptionsBtn' : '');
+    actions.appendChild(edit);
+    actions.appendChild(remove);
+
+    card._refs.edit = edit;
+    card._refs.delete = remove;
+
+    head.appendChild(heading);
+    head.appendChild(actions);
+    card.appendChild(head);
+
+    const list = document.createElement('div');
+    list.className = 'options-list';
+    if (isLatest) list.id = 'optionsList';
+    card._refs.list = list;
+    card.appendChild(list);
+
+    // 自定义行动 / 剧情走向只属于「下一步」，历史卡片不重复给
+    if (isLatest) {
+      const customButton = document.createElement('button');
+      customButton.className = 'option-custom';
+      customButton.id = 'customActionBtn';
+      customButton.type = 'button';
+      customButton.textContent = '自定义行动';
+      card.appendChild(customButton);
+
+      const directionButton = document.createElement('button');
+      directionButton.className = 'option-custom ghost' + (getDirection() ? ' has-value' : '');
+      directionButton.id = 'directionChipBtn';
+      directionButton.type = 'button';
+      directionButton.textContent = getDirection()
+        ? '剧情走向：已设置（点击修改）'
+        : '设置剧情走向';
+      card.appendChild(directionButton);
+    }
+
+    // 旧步骤点选项时在这里出一行小字，不弹 alert
+    const hint = document.createElement('div');
+    hint.className = 'options-hint';
+    hint.hidden = true;
+    card._refs.hint = hint;
+    card.appendChild(hint);
+
+    const branch = makeStepButton(
+      '从这一版开分支',
+      'branch',
+      key,
+      '从正在看的这一版创建分支',
+      isLatest ? 'branchFromVersionBtn' : ''
+    );
+    branch.className = 'option-branch';
+    card._refs.branch = branch;
+    card.appendChild(branch);
+
+    story.appendChild(card);
+    cardElements[String(key)] = card;
+
+    syncStepCard(key);
+  }
+
+  // 把某一步当前版本铺到卡片上：翻页、编辑、删除后都只走这里，不发请求
+  function syncStepCard(key) {
+    const card = cardElements[String(key)];
+
+    if (!card || !card._step || !card._refs) return;
+
+    const step = card._step;
+    const refs = card._refs;
+    const total = step.versions.length;
+    const index = stepIndexOf(key, total);
+    const active = step.versions[index] || null;
+    const options = active && Array.isArray(active.options) ? active.options : [];
+
+    step.activeId = active ? Number(active.id) : 0;
+
+    refs.list.innerHTML = '';
+
+    options.forEach((option, optionIndex) => {
       const button = document.createElement('button');
-      button.className = 'option-item';
       button.type = 'button';
-      button.dataset.optionIndex = String(index);
+      button.className = 'option-item';
+      button.dataset.optionIndex = String(optionIndex);
+      button.dataset.stepKey = String(key);
       button.textContent = String(option);
-      list.appendChild(button);
+
+      // 旧步骤不能直接选，只能从这一版开分支
+      if (!step.isLatest) {
+        button.classList.add('is-locked');
+        button.title = '以前的进度，不能直接选';
+      }
+
+      refs.list.appendChild(button);
     });
 
-    const pager = $('optionsPager');
-    const prev = $('optionsPrevBtn');
-    const next = $('optionsNextBtn');
-    const label = $('optionsPagerLabel');
-    const deleteButton = $('deleteOptionsBtn');
+    refs.hint.hidden = true;
 
-    if (pager) pager.hidden = total <= 1;
-    if (label) label.textContent = (optionVersionIndex + 1) + '/' + Math.max(total, 1);
-    if (prev) prev.disabled = optionVersionIndex <= 0;
-    if (next) next.disabled = optionVersionIndex >= total - 1;
-    if (deleteButton) deleteButton.disabled = total <= 1;
+    refs.pager.hidden = total <= 1;
+    refs.label.textContent = (index + 1) + '/' + Math.max(total, 1);
+    refs.prev.disabled = index <= 0;
+    refs.next.disabled = index >= total - 1;
+
+    refs.edit.disabled = false;
+    refs.delete.disabled = total <= 1;
+    refs.delete.title = total <= 1
+      ? '这段只有一版选项，删了就没了'
+      : '删除这一版';
+
+    // 最新一步继续复用老变量（换一批 / 撤回）
+    if (step.isLatest) {
+      latestStepKey = String(key);
+      optionVersions = step.versions;
+      optionVersionIndex = index;
+      optionNarrationId = step.narrationId || latestNarrationId;
+      currentOptions = options.slice();
+    }
   }
 
+  function showStepHint(key) {
+    const card = cardElements[String(key)];
+
+    if (!card || !card._refs) return;
+
+    card._refs.hint.hidden = false;
+    card._refs.hint.textContent = '这是以前的进度，要往前走请从这一版开分支';
+  }
+
+  function stepStepVersion(key, delta) {
+    const card = cardElements[String(key)];
+
+    if (!card || !card._step) return;
+
+    const total = card._step.versions.length;
+    const index = Number(stepIndex[String(key)]);
+    const nextIndex = index + delta;
+
+    if (!Number.isInteger(index) || nextIndex < 0 || nextIndex >= total) return;
+
+    stepIndex[String(key)] = nextIndex;
+    syncStepCard(key);
+  }
+
+  // 兼容老入口（只翻最新一步）
   function stepOptionVersion(delta) {
-    if (!optionVersions.length) return;
+    if (!latestStepKey) return;
+    stepStepVersion(latestStepKey, delta);
+  }
 
-    const nextIndex = optionVersionIndex + delta;
+  // 就地重绘（编辑 / 删除之后）：保留滚动位置，不整页 reload
+  function repaintStory() {
+    const story = $('story');
+    const storyTop = story ? story.scrollTop : 0;
+    const scroller = document.scrollingElement || document.documentElement;
+    const pageTop = scroller ? scroller.scrollTop : 0;
 
-    if (nextIndex < 0 || nextIndex >= optionVersions.length) return;
+    renderStory({ noScroll: true });
 
-    optionVersionIndex = nextIndex;
-    syncOptionsView();
+    if (story) story.scrollTop = storyTop;
+    if (scroller) scroller.scrollTop = pageTop;
+  }
+
+  async function refreshStepVersions() {
+    await loadStepVersions(true);
+    repaintStory();
   }
 
   function showTyping() {
@@ -747,6 +890,7 @@
   }
 
   // 换一批选项：只重新生成选项，旁白不动，旧版本留着
+  // 换一批选项：只给最新一步追加版本，历史步骤不动
   async function regenerateOptions() {
     if (sending || !optionNarrationId) return;
 
@@ -786,12 +930,28 @@
   }
 
   let editingOptionsId = 0;
+  let editingStepKey = '';
 
-  function editOptionsVersion() {
-    const active = optionVersions[optionVersionIndex];
+  // 取某一步正在显示的那一版（不传 key 就当最新一步，兼容老入口）
+  function activeVersionOfStep(key) {
+    const target = key == null || key === '' ? latestStepKey : String(key);
+    const card = cardElements[target];
+
+    if (!card || !card._step) return { card: null, active: null, key: target };
+
+    const versions = card._step.versions;
+    const index = stepIndexOf(target, versions.length);
+
+    return { card, active: versions[index] || null, key: target };
+  }
+
+  function editOptionsVersion(key) {
+    const { active } = activeVersionOfStep(key);
+
     if (!active) return;
 
     editingOptionsId = Number(active.id);
+    editingStepKey = String(key == null || key === '' ? latestStepKey : key);
 
     const textarea = $('optionsEditText');
     if (textarea) {
@@ -851,7 +1011,18 @@
       }
 
       closeSheets();
-      await loadMessages(savedId);
+
+      // 就地重绘再拉一次版本，别整页 reload；停在刚改的那一版
+      if (editingStepKey && cardElements[editingStepKey]) {
+        const versions = cardElements[editingStepKey]._step.versions;
+        const index = versions.findIndex(
+          (version) => Number(version.id) === Number(savedId)
+        );
+
+        if (index >= 0) stepIndex[editingStepKey] = index;
+      }
+
+      await refreshStepVersions();
     } catch (error) {
       if (status) {
         status.hidden = false;
@@ -864,18 +1035,18 @@
     }
   }
 
-  async function deleteOptionsVersion() {
+  async function deleteOptionsVersion(key) {
     if (sending) return;
 
-    const active = optionVersions[optionVersionIndex];
-    if (!active || optionVersions.length <= 1) return;
+    const { card, active, key: target } = activeVersionOfStep(key);
+
+    if (!active || !card || card._step.versions.length <= 1) return;
 
     if (!confirm('删掉这一版选项？其他版本还在。')) return;
 
     sending = true;
 
-    const button = $('deleteOptionsBtn');
-    if (button) button.disabled = true;
+    if (card._refs && card._refs.delete) card._refs.delete.disabled = true;
 
     try {
       const response = await fetch('/api/theater/options/' + active.id, {
@@ -888,28 +1059,37 @@
         throw new Error(data.error || '删除失败');
       }
 
-      await loadMessages();
+      await refreshStepVersions();
+
+      // 删的是最后一版时，index 会自动夹到新的最后一版
+      if (Number(stepIndex[target]) >= (cardElements[target] && cardElements[target]._step.versions.length || 0)) {
+        delete stepIndex[target];
+      }
     } catch (error) {
       alert('删除失败：' + error.message);
     } finally {
       sending = false;
-
-      const again = $('deleteOptionsBtn');
-      if (again) again.disabled = optionVersions.length <= 1;
     }
   }
 
-  // 从正在看的这一版选项开分支
-  async function branchFromVersion() {
+  // 从某一步正在看的这一版开分支（历史步骤也能开）
+  async function branchFromVersion(key) {
     if (sending) return;
 
-    const active = optionVersions[optionVersionIndex];
+    const { card, active } = activeVersionOfStep(key);
 
-    if (!active || !optionNarrationId) return;
+    if (!card || !active) return;
+
+    const narrationId = Number(card._step.narrationId) || 0;
+
+    if (!narrationId) {
+      showStepHint(card._step.key);
+      return;
+    }
 
     sending = true;
 
-    const button = $('branchFromVersionBtn');
+    const button = card._refs && card._refs.branch;
     if (button) {
       button.disabled = true;
       button.textContent = '正在创建分支…';
@@ -922,7 +1102,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            narration_id: optionNarrationId,
+            narration_id: narrationId,
             options_id: Number(active.id),
             title: (session && session.title ? session.title : '剧情') + ' · 分支'
           })
@@ -945,10 +1125,9 @@
       alert('创建分支失败：' + error.message);
       sending = false;
 
-      const again = $('branchFromVersionBtn');
-      if (again) {
-        again.disabled = false;
-        again.textContent = '从这一版开分支';
+      if (button) {
+        button.disabled = false;
+        button.textContent = '从这一版开分支';
       }
     }
   }
@@ -1044,11 +1223,52 @@
       return;
     }
 
+    // 历史步骤的卡片按钮都带 data-step-action，一张卡一套
+    const stepButton = event.target.closest('[data-step-action]');
+
+    if (stepButton) {
+      const action = stepButton.dataset.stepAction;
+      const stepKey = stepButton.dataset.stepKey;
+
+      if (action === 'prev') {
+        stepStepVersion(stepKey, -1);
+      } else if (action === 'next') {
+        stepStepVersion(stepKey, 1);
+      } else if (action === 'rollback') {
+        rollbackStep();
+      } else if (action === 'regenerate') {
+        regenerateOptions();
+      } else if (action === 'edit') {
+        editOptionsVersion(stepKey);
+      } else if (action === 'delete') {
+        deleteOptionsVersion(stepKey);
+      } else if (action === 'branch') {
+        branchFromVersion(stepKey);
+      }
+
+      return;
+    }
+
     const option = event.target.closest('[data-option-index]');
 
     if (option) {
+      const stepKey = option.dataset.stepKey;
+      const card = cardElements[stepKey];
+
+      if (!card || !card._step) return;
+
+      // 以前的进度不能直接选，只给一行小字
+      if (!card._step.isLatest) {
+        showStepHint(stepKey);
+        return;
+      }
+
       const index = Number(option.dataset.optionIndex);
-      const text = currentOptions[index];
+      const versions = card._step.versions;
+      const active = versions[Number(stepIndex[stepKey])] || null;
+      const options = active && Array.isArray(active.options) ? active.options : [];
+      const text = options[index];
+
       if (text) sendAction(text);
       return;
     }

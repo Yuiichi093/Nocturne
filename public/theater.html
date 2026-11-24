@@ -83,6 +83,63 @@
       background: var(--fill);
       color: var(--ink);
     }
+
+    /* 找回删掉的剧情：一行小字入口 + 弹层里的列表 */
+    .recover-link {
+      display: block;
+      width: 100%;
+      margin: 10px 0 0;
+      padding: 10px 2px;
+      border: 0;
+      background: none;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: left;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .recover-hint {
+      margin: -4px 0 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .recover-list {
+      display: grid;
+      gap: 8px;
+      max-height: 46vh;
+      overflow-y: auto;
+      margin-bottom: 14px;
+    }
+
+    .recover-row {
+      display: block;
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--card);
+      color: inherit;
+      font: inherit;
+      text-align: left;
+    }
+
+    .recover-row .recover-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .recover-row .recover-sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .recover-row:disabled {
+      opacity: 0.5;
+    }
   </style>
 </head>
 <body>
@@ -92,8 +149,20 @@
   </header>
 
   <div class="script-list" id="scriptList">加载中...</div>
+  <button class="recover-link" id="recoverBtn" type="button">删掉的剧情？从自动备份里找回</button>
 
   <button class="fab" id="addBtn" type="button">+</button>
+
+  <div class="modal-backdrop" id="recoverBackdrop">
+    <div class="modal">
+      <h2>找回删掉的剧情</h2>
+      <p class="recover-hint">从每天的自动备份里翻，最近 7 天删掉的都能找回来；找回的会是一份新的剧情，原标题后面缀「（找回）」。</p>
+      <div class="recover-list" id="recoverList">正在翻备份…</div>
+      <div class="modal-actions">
+        <button class="ghost" id="recoverClose" type="button">关闭</button>
+      </div>
+    </div>
+  </div>
 
   <div class="modal-backdrop" id="modalBackdrop">
     <div class="modal">
@@ -196,6 +265,90 @@
       editingScript = null;
       $('scriptForm').reset();
     }
+
+    // ---- 找回删掉的剧情 ----
+    function formatStamp(value) {
+      const date = new Date(value || 0);
+      if (!date.getTime()) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return (date.getMonth() + 1) + '月' + date.getDate() + '日 ' +
+        pad(date.getHours()) + ':' + pad(date.getMinutes());
+    }
+
+    async function openRecover() {
+      const list = $('recoverList');
+      list.innerHTML = '正在翻备份…';
+      $('recoverBackdrop').classList.add('open');
+
+      try {
+        const response = await fetch('/api/theater/recover/list');
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '翻备份失败');
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+
+        if (!items.length) {
+          list.innerHTML = '<div class="recover-hint">备份里没有找到被删掉的剧情（只能找回最近 7 天，而且是每天启动时存的那份）。</div>';
+          return;
+        }
+
+        list.innerHTML = items.map((item) => `
+          <button class="recover-row" type="button"
+                  data-recover="${item.session_id}"
+                  data-snapshot="${escapeHtml(item.snapshot)}">
+            <div class="recover-title">${escapeHtml(item.title || '未命名剧情')}</div>
+            <div class="recover-sub">${item.message_count} 条消息 · 最后动过 ${escapeHtml(formatStamp(item.updated_at))}</div>
+          </button>
+        `).join('');
+      } catch (error) {
+        list.innerHTML = '<div class="recover-hint">' + escapeHtml(error.message) + '</div>';
+      }
+    }
+
+    function closeRecover() {
+      $('recoverBackdrop').classList.remove('open');
+    }
+
+    $('recoverBtn').addEventListener('click', openRecover);
+    $('recoverClose').addEventListener('click', closeRecover);
+
+    $('recoverBackdrop').addEventListener('click', (event) => {
+      if (event.target === $('recoverBackdrop')) closeRecover();
+    });
+
+    $('recoverList').addEventListener('click', async (event) => {
+      const row = event.target.closest('[data-recover]');
+      if (!row) return;
+
+      if (!confirm('把这段剧情从自动备份里找回来？会生成一份新的剧情。')) return;
+
+      row.disabled = true;
+
+      try {
+        const response = await fetch('/api/theater/recover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: Number(row.dataset.recover),
+            snapshot: row.dataset.snapshot || ''
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || '找回失败');
+        }
+
+        location.href = '/theater-play.html?session=' + data.session_id;
+      } catch (error) {
+        alert(error.message);
+        row.disabled = false;
+      }
+    });
 
     $('addBtn').addEventListener('click', () => openModal(null));
     $('cancelBtn').addEventListener('click', closeModal);

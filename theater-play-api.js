@@ -698,6 +698,37 @@ module.exports = function (app, db) {
     });
   });
 
+  // 整个会话所有步骤的选项版本，一次拿全（历史卡片翻页用，切步骤不再发请求）
+  app.get('/api/theater/sessions/:id/options/all', (req, res) => {
+    const session = db.prepare('SELECT * FROM theater_sessions WHERE id = ?')
+      .get(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({ error: '剧场会话不存在' });
+    }
+
+    const narrations = db.prepare(`
+      SELECT id FROM theater_messages
+      WHERE session_id = ? AND role = 'narration'
+      ORDER BY id ASC
+    `).all(session.id);
+
+    const groups = [];
+
+    narrations.forEach((narration) => {
+      const versions = versionedOptions(session.id, Number(narration.id));
+
+      if (versions.length) {
+        groups.push({
+          narration_id: Number(narration.id),
+          versions
+        });
+      }
+    });
+
+    res.json({ ok: true, groups });
+  });
+
   // 只重新生成选项（旁白不动），追加新版本
   app.post('/api/theater/sessions/:id/options', async (req, res) => {
     const session = db.prepare('SELECT * FROM theater_sessions WHERE id = ?')
