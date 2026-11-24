@@ -475,6 +475,31 @@
     return button;
   }
 
+  // 头部按钮：小符号 + 说明字（花雪一反馈光有符号认不出）
+  function makeActionButton(icon, text, action, key, title, id) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.title = title;
+    button.dataset.stepAction = action;
+    button.dataset.stepKey = String(key);
+    button.className = 'options-action';
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'options-action-icon';
+    iconSpan.textContent = icon;
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'options-action-text';
+    textSpan.textContent = text;
+
+    button.appendChild(iconSpan);
+    button.appendChild(textSpan);
+    button._label = textSpan;
+
+    if (id) button.id = id;
+    return button;
+  }
+
   function buildOptionsCard(story, key, narrationId, message) {
     const meta = parseJson(message.meta_json, {});
     const versions = versionsOfStep(key, meta.options, message.id);
@@ -526,14 +551,19 @@
     actions.className = 'options-head-actions';
 
     if (isLatest) {
-      const rollback = makeStepButton('↩', 'rollback', key, '撤回上一步', 'rollbackBtn');
-      const regenerate = makeStepButton('⟲', 'regenerate', key, '换一批选项', 'regenerateBtn');
+      const rollback = makeActionButton('↩', '撤回', 'rollback', key, '撤回上一步', 'rollbackBtn');
+      const regenerate = makeActionButton('⟲', '换一批', 'regenerate', key, '换一批选项', 'regenerateBtn');
+      const rewrite = makeActionButton('↻', '重写这段', 'rewrite', key, '把这段旁白和选项一起重写', 'rewriteSegmentBtn');
       actions.appendChild(rollback);
       actions.appendChild(regenerate);
+      actions.appendChild(rewrite);
+      card._refs.rollback = rollback;
+      card._refs.regenerate = regenerate;
+      card._refs.rewrite = rewrite;
     }
 
-    const edit = makeStepButton('✎', 'edit', key, '编辑这一版', isLatest ? 'editOptionsBtn' : '');
-    const remove = makeStepButton('🗑', 'delete', key, '删除这一版', isLatest ? 'deleteOptionsBtn' : '');
+    const edit = makeActionButton('✎', '改选项', 'edit', key, '编辑这一版', isLatest ? 'editOptionsBtn' : '');
+    const remove = makeActionButton('🗑', '删选项', 'delete', key, '删除这一版', isLatest ? 'deleteOptionsBtn' : '');
     actions.appendChild(edit);
     actions.appendChild(remove);
 
@@ -639,6 +669,14 @@
     refs.delete.title = total <= 1
       ? '这段只有一版选项，删了就没了'
       : '删除这一版';
+
+    if (refs.rollback) refs.rollback.disabled = false;
+    if (refs.regenerate) refs.regenerate.disabled = false;
+
+    if (refs.rewrite) {
+      refs.rewrite.disabled = false;
+      refs.rewrite._label.textContent = '重写这段';
+    }
 
     // 最新一步继续复用老变量（换一批 / 撤回）
     if (step.isLatest) {
@@ -929,6 +967,66 @@
     }
   }
 
+  // 整段重写：先删最后一段旁白 + 这一步所有选项版本，再走一次自然续写。
+  // 生成中把卡片头部按钮全禁掉、按钮文字显示「重写中…」。
+  async function rewriteSegment() {
+    if (sending) return;
+
+    const confirmed = confirm('把这一段旁白和它的选项一起重写？');
+    if (!confirmed) return;
+
+    sending = true;
+
+    const card = cardElements[latestStepKey];
+    const refs = card && card._refs;
+
+    if (refs) {
+      ['rollback', 'regenerate', 'rewrite', 'edit', 'delete'].forEach((action) => {
+        const button = refs[action];
+        if (button) button.disabled = true;
+      });
+
+      if (refs.rewrite && refs.rewrite._label) {
+        refs.rewrite._label.textContent = '重写中…';
+      }
+    }
+
+    showTyping();
+
+    try {
+      const response = await fetch(
+        '/api/theater/sessions/' + sessionId + '/rewrite-last',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || '重写失败');
+      }
+
+      if (data.needs_next) {
+        // 复用自然续写这条路径；不写 user 消息
+        await sendAction('', { force: true });
+      } else {
+        await loadMessages();
+      }
+    } catch (error) {
+      alert('重写失败：' + error.message);
+    } finally {
+      hideTyping();
+      sending = false;
+
+      if (latestStepKey && cardElements[latestStepKey]) {
+        syncStepCard(latestStepKey);
+      }
+    }
+  }
+
   let editingOptionsId = 0;
   let editingStepKey = '';
 
@@ -1132,8 +1230,9 @@
     }
   }
 
-  async function sendAction(action) {
-    if (sending) return;
+  async function sendAction(action, options) {
+    // 重写流程里先占住 sending 再复用这条自然续写，所以给一个 force 口子
+    if (sending && !(options && options.force)) return;
 
     sending = true;
     closeSheets();
@@ -1238,6 +1337,8 @@
         rollbackStep();
       } else if (action === 'regenerate') {
         regenerateOptions();
+      } else if (action === 'rewrite') {
+        rewriteSegment();
       } else if (action === 'edit') {
         editOptionsVersion(stepKey);
       } else if (action === 'delete') {

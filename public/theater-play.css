@@ -258,41 +258,64 @@ html[data-theme="dark"] .play-header {
 
 .options-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 6px 10px;
   margin-bottom: 4px;
 }
 
 .options-head h2 {
   margin: 0;
+  flex: 0 0 auto;
   font-size: 17px;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
 
+/* 小符号 + 说明字：窄屏自动换行，别挤成一坨，也别把卡片顶宽 */
 .options-head-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  justify-content: flex-end;
+  gap: 4px 6px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .options-head-actions button {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  padding: 0;
+  width: auto;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 9px;
   border: 0;
-  border-radius: 50%;
-  background: transparent;
+  border-radius: 999px;
+  background: var(--fill);
   color: var(--muted);
   font: inherit;
-  font-size: 16px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .options-head-actions button:active {
-  background: var(--fill);
+  background: var(--fill-strong);
+}
+
+.options-action-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.options-action-text {
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0;
 }
 
 .options-head-actions #regenerateBtn {
@@ -355,6 +378,17 @@ html[data-theme="dark"] .play-header {
   padding: 14px 18px 12px;
   background: var(--fill);
   box-shadow: none;
+}
+
+.options-card.is-history .options-head-actions button {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  background: transparent;
+}
+
+.options-card.is-history .options-action-text {
+  font-size: 11px;
 }
 
 .options-card.is-history .options-head h2 {

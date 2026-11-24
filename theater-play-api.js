@@ -943,6 +943,53 @@ module.exports = function (app, db) {
     res.json({ ok: true, removed });
   });
 
+  // 整段重写：把最后一段旁白 + 这一步的所有选项版本一起删掉，
+  // 前端收到 needs_next 后再走一次自然续写（sendAction('')）生成新的旁白+选项。
+  // 删之前先确认模型可用，别把剧情删了才发现没配模型。
+  app.post('/api/theater/sessions/:id/rewrite-last', (req, res) => {
+    const session = db.prepare('SELECT * FROM theater_sessions WHERE id = ?')
+      .get(req.params.id);
+
+    if (!session) {
+      return res.status(404).json({ error: '剧场会话不存在' });
+    }
+
+    const modelRow = db.prepare(`
+      SELECT id FROM model_profiles
+      WHERE is_image = 0
+      ORDER BY is_default DESC, id DESC
+      LIMIT 1
+    `).get();
+
+    if (!modelRow) {
+      return res.status(400).json({ error: '还没有配置模型 API' });
+    }
+
+    const lastNarration = lastNarrationOf(session.id);
+
+    if (!lastNarration) {
+      return res.status(400).json({ error: '还没有旁白可以重写' });
+    }
+
+    const versions = optionRowsOfNarration(session.id, Number(lastNarration.id));
+    let removed = 0;
+
+    versions.forEach((row) => {
+      db.prepare('DELETE FROM theater_messages WHERE id = ?').run(row.id);
+      removed += 1;
+    });
+
+    db.prepare('DELETE FROM theater_messages WHERE id = ?').run(lastNarration.id);
+    removed += 1;
+
+    res.json({
+      ok: true,
+      needs_next: true,
+      narration_id: Number(lastNarration.id),
+      removed
+    });
+  });
+
   // 撤回上一步：把最后一整步删掉，回到上一次的选项卡片，让她重新选。
   // 「一整步」= 她的行动 + 最后一段旁白 + 那批选项 + 这一步之后画的插画。
   app.post('/api/theater/sessions/:id/rollback', (req, res) => {
