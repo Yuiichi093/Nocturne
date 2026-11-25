@@ -403,10 +403,10 @@
             note.textContent = '这次没套上参考图：' + describeImageError(imageMeta.reference_error);
             block.appendChild(note);
           } else if (Number(imageMeta.reference_count) === 0) {
-            // 压根没有参考图可用：说清楚，省得她以为是设定图没生效
+            // 压根没有参考图可用：把原因说具体，别只写「都没挂」
             const note = document.createElement('div');
             note.className = 'image-note image-note-inline';
-            note.textContent = '这次没有参考图来对着画（身份卡和角色都没挂设定图）';
+            note.textContent = describeMissingReferences(imageMeta.reference_missing);
             block.appendChild(note);
           } else if (Number(imageMeta.reference_count) > 0) {
             const note = document.createElement('div');
@@ -830,6 +830,22 @@
   }
 
   // 把接口的原始错误（可能是 JSON 串）压成一句人话
+  // 没有参考图时，把原因说得具体点：是哪张身份卡、还是根本没找到这张卡
+  function describeMissingReferences(missing) {
+    const info = missing || {};
+    const name = String(info.identity_name || '').trim();
+
+    if (!name) {
+      return '这次没有参考图：上帝视角进入，没有身份卡，角色卡也没挂设定图';
+    }
+
+    if (info.identity_card_found === false) {
+      return '这次没有参考图：剧本里没找到叫「' + name + '」的身份卡（可能改名了），角色卡也没挂设定图';
+    }
+
+    return '这次没有参考图：身份卡「' + name + '」和剧本里其他卡、角色卡都没挂设定图';
+  }
+
   function describeImageError(raw) {
     const text = String(raw || '').trim();
 

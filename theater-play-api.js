@@ -435,7 +435,7 @@ module.exports = function (app, db) {
     function addAll(urls, tag) {
       let used = false;
 
-      urls.forEach((url) => {
+      (urls || []).forEach((url) => {
         if (merged.length >= 4) return;
         if (merged.includes(url)) return;
 
@@ -446,37 +446,101 @@ module.exports = function (app, db) {
       if (used) sources.push(tag);
     }
 
+    const detail = {
+      identity_name: cleanText(session.identity_name),
+      identity_card_found: false,
+      identity_refs: 0,
+      other_identity_refs: 0,
+      character_refs: 0
+    };
+
+    const script = db.prepare(
+      'SELECT identities_json, cast_ids FROM theater_scripts WHERE id = ?'
+    ).get(session.script_id);
+
+    const identities = script
+      ? safeJsonParse(script.identities_json, [])
+      : [];
+    const identityList = Array.isArray(identities) ? identities : [];
+
+    const normalize = (value) => cleanText(value).replace(/\s+/g, '');
+    const wanted = normalize(detail.identity_name);
+
+    const refsOf = (card) => (card && Array.isArray(card.ref_images)
+      ? card.ref_images.map(refImageUrl).filter(Boolean)
+      : []);
+
     // 老会话（1.2.20 之前建的）身上没存 identity_refs，
     // 这时候回剧本里按身份名把那张身份卡的参考图捞出来，不然她会以为设定图没用上
     let identityRefs = safeJsonParse(session.identity_refs, [])
       .map(refImageUrl)
       .filter(Boolean);
     let identityTag = 'identity';
+    let matchedCard = null;
 
-    if (!identityRefs.length && cleanText(session.identity_name)) {
-      const script = db.prepare(
-        'SELECT identities_json FROM theater_scripts WHERE id = ?'
-      ).get(session.script_id);
+    if (wanted) {
+      // 先找名字完全一样的；找不到再退一步找「互相包含」的，
+      // 免得会话里叫「雪一」、剧本卡片叫「花雪一」就白瞎了一张设定图
+      matchedCard = identityList.find((item) => normalize(item && item.name) === wanted) || null;
 
-      const identities = script
-        ? safeJsonParse(script.identities_json, [])
-        : [];
-      const wanted = cleanText(session.identity_name);
-
-      const hit = (Array.isArray(identities) ? identities : []).find(
-        (item) => cleanText(item && item.name) === wanted
-      );
-
-      if (hit && Array.isArray(hit.ref_images)) {
-        identityRefs = hit.ref_images.map(refImageUrl).filter(Boolean);
-        if (identityRefs.length) identityTag = 'identity:script';
+      if (!matchedCard) {
+        matchedCard = identityList.find((item) => {
+          const name = normalize(item && item.name);
+          return name && (name.includes(wanted) || wanted.includes(name));
+        }) || null;
       }
     }
 
-    addAll(identityRefs, identityTag);
-    addAll(characterRefImages(characterId), 'character');
+    detail.identity_card_found = Boolean(matchedCard);
 
-    return { refImages: merged, sources };
+    if (!identityRefs.length && matchedCard) {
+      identityRefs = refsOf(matchedCard);
+      if (identityRefs.length) identityTag = 'identity:script';
+    }
+
+    detail.identity_refs = identityRefs.length;
+
+    // 同一张剧本里其他身份卡上的设定图也带上：
+    // 有的角色（比如另一个主角）设定图只挂在自己的身份卡上，角色栏里是空的
+    const otherIdentityRefs = [];
+
+    identityList.forEach((card) => {
+      if (!card || card === matchedCard) return;
+      if (normalize(card.name) === wanted) return;
+
+      refsOf(card).forEach((url) => {
+        if (!otherIdentityRefs.includes(url)) otherIdentityRefs.push(url);
+      });
+    });
+
+    detail.other_identity_refs = otherIdentityRefs.length;
+
+    // 剧本里的角色：先被画的这个，再是其他角色
+    const castIds = safeJsonParse(script && script.cast_ids, [])
+      .map((id) => Number(id))
+      .filter(Boolean);
+
+    const orderedCast = [];
+    if (Number(characterId)) orderedCast.push(Number(characterId));
+    castIds.forEach((id) => {
+      if (!orderedCast.includes(id)) orderedCast.push(id);
+    });
+
+    const characterRefs = [];
+
+    orderedCast.forEach((id) => {
+      characterRefImages(id).forEach((url) => {
+        if (!characterRefs.includes(url)) characterRefs.push(url);
+      });
+    });
+
+    detail.character_refs = characterRefs.length;
+
+    addAll(identityRefs, identityTag);
+    addAll(otherIdentityRefs, 'identity:other');
+    addAll(characterRefs, 'character');
+
+    return { refImages: merged, sources, detail };
   }
 
   // 有的家出错时回一坨 JSON，捞一句人话出来
@@ -1689,8 +1753,9 @@ module.exports = function (app, db) {
       meta.reference_sources = sceneRefs.sources.slice();
       meta.reference_count = sceneRefs.refImages.length;
     } else {
-      // 一张都没有：前端据此说一句「这次没有参考图」，省得她一直猜
+      // 一张都没有：把「为什么没有」记下来，前端原样说给她听，省得她一直猜
       meta.reference_count = 0;
+      meta.reference_missing = sceneRefs.detail || {};
     }
 
     // 有参考图却没套上时，把原因一起留在消息里，前端好如实告诉她
