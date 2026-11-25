@@ -1089,7 +1089,24 @@
   function friendlyImageError(message) {
     const raw = String(message || '');
 
-    if (/moderation_blocked|safety system|content[ _]policy/i.test(raw)) {
+    if (/insufficient[ _]account[ _]balance|insufficient_quota|exceeded your current quota|余额不足/i.test(raw)) {
+      return '生图那个中转站说你账户余额不够了（insufficient account balance），去那边充值后再画。' +
+        '充完这一单重画就行，剧情不受影响';
+    }
+
+    if (/(invalid|incorrect)[ _]api[ _]key|unauthorized|401/i.test(raw)) {
+      return '生图模型的 API Key 好像不对或者过期了（' + raw.slice(0, 60) + '），去「模型设置」里检查一下';
+    }
+
+    if (/rate[ _]limit|too many requests|429/i.test(raw)) {
+      return '画得太快，被中转站限流了（rate limit），等一两分钟再试';
+    }
+
+    if (/model[ _]not[ _]found|does not exist|no such model|not available/i.test(raw)) {
+      return '这家中转不认这个模型名（' + raw.slice(0, 60) + '），去「模型设置」里换个名字';
+    }
+
+    if (/content[ _]policy|safety system|moderation_blocked/i.test(raw)) {
       const code = /moderation_blocked/i.test(raw)
         ? 'moderation_blocked'
         : (/safety system/i.test(raw) ? 'safety system' : 'content policy');

@@ -159,6 +159,96 @@ function register(app, db) {
     return files.slice(0, 4);
   }
 
+  // 有的平台 HTTP 200 但 body 里是错误（魔搭就是 errors.message），别当成「返回格式不认识」
+  function imageApiError(data) {
+    if (!data) return '';
+
+    const errors = data.errors || data.error;
+
+    if (!errors) return '';
+
+    const message = typeof errors === 'string'
+      ? errors
+      : (errors.message || errors.code || '');
+
+    const text = cleanText(message);
+
+    if (/authentication|unauthorized|invalid.*token|api[ _]key/i.test(text)) {
+      return 'API Key 不对或者没权限：' + text.slice(0, 120);
+    }
+
+    if (/balance|quota|insufficient/i.test(text)) {
+      return '平台说额度不够：' + text.slice(0, 120);
+    }
+
+    return text ? '生图接口报错：' + text.slice(0, 160) : '';
+  }
+
+  // 魔搭这类平台：提交后不直接给图，只回一个 task_id，得再轮询任务接口。
+  // 轮询时带上 X-ModelScope-Task-Type: image_generation，否则拿不到结果。
+  async function pollAsyncImage(modelRow, headers, taskId) {
+    const base = cleanText(modelRow.base_url).replace(/\/+$/, '');
+    const root = base.replace(/\/v\d+$/, '');
+    const candidates = [base + '/tasks/' + encodeURIComponent(taskId)];
+    if (root !== base) candidates.push(root + '/v1/tasks/' + encodeURIComponent(taskId));
+
+    const pollHeaders = { ...headers, 'X-ModelScope-Task-Type': 'image_generation' };
+    const deadline = Date.now() + 170000;
+    let lastStatus = '';
+
+    while (Date.now() < deadline) {
+      for (const url of candidates) {
+        try {
+          const response = await fetch(url, { method: 'GET', headers: pollHeaders });
+          const text = await response.text();
+
+          if (!response.ok) {
+            lastStatus = text.slice(0, 160);
+            continue;
+          }
+
+          let data = null;
+          try { data = JSON.parse(text); } catch (e) {}
+
+          const status = cleanText(data && data.task_status).toUpperCase();
+          lastStatus = status || lastStatus;
+
+          if (status === 'SUCCEED') {
+            const output = data && data.output;
+            const imageUrl = Array.isArray(output)
+              ? cleanText(output[0])
+              : cleanText(output && (output.image_url || output.images || output.url));
+
+            if (!imageUrl) throw new Error('任务成功但没拿到图片地址');
+
+            const imageResponse = await fetch(imageUrl);
+            const buffer = Buffer.from(await imageResponse.arrayBuffer());
+            return saveImage(buffer, '.png');
+          }
+
+          if (status === 'FAILED') {
+            const detail = cleanText(data && (data.message || data.error || data.errors));
+            throw new Error('生图任务失败：' + (detail || '平台没给原因').slice(0, 120));
+          }
+
+          if (status === 'SUCCEED') {
+            throw new Error('任务成功但没拿到图片地址');
+          }
+
+          break; // 这个地址通了但还在跑，直接等下一轮
+        } catch (error) {
+          // 任务已经结束的结论直接抛；网络抖动只是记一下接着试
+          if (/任务/.test(error.message || '')) throw error;
+          lastStatus = error.message || lastStatus;
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+
+    throw new Error('生图任务等待超时（' + (lastStatus || '还在跑') + '），稍后去任务里看结果');
+  }
+
   // 带参考图的请求：OpenAI 的 /images/edits 走 multipart
   async function requestImageWithReference(modelRow, prompt, size, refs) {
     const headers = { ...parseHeaders(modelRow.extra_headers) };
@@ -225,6 +315,17 @@ function register(app, db) {
               const imageResponse = await fetch(first.url);
               const buffer = Buffer.from(await imageResponse.arrayBuffer());
               return { url: saveImage(buffer, '.png') };
+            }
+
+            const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
+
+            if (taskId) {
+              try {
+                return { url: await pollAsyncImage(modelRow, headers, taskId) };
+              } catch (error) {
+                attemptErrors.push(field + '：' + truncated(error.message));
+                continue;
+              }
             }
 
             attemptErrors.push(field + '：参考图接口返回格式不认识');
@@ -300,13 +401,27 @@ function register(app, db) {
         } catch (e) {}
 
         const first = data && data.data && data.data[0];
+        const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
+        const apiError = first ? '' : imageApiError(data);
 
-        if (!first) {
+        if (apiError) {
+          throw new Error(apiError);
+        }
+
+        if (!first && !taskId) {
           throw new Error('返回里没有图片数据：' + text.slice(0, 200));
         }
 
         generationOk = true;
-        lines.push('生图：可用（' + (first.url ? '返回图片链接' : '返回 base64') + '）');
+
+        if (!first && taskId) {
+          // 异步平台：能拿到任务号就说明这条链路通了
+          lines.push('生图：可用（异步任务，提交后返回 task_id）' + '\n　　第一次出图要等一两分钟，之后每次也会慢一点');
+        }
+
+        if (first) {
+          lines.push('生图：可用（' + (first.url ? '返回图片链接' : '返回 base64') + '）');
+        }
         break;
       } catch (error) {
         genError = error.name === 'AbortError' ? '请求超时' : (error.message || genError);
@@ -432,6 +547,19 @@ function register(app, db) {
           } catch (e) {}
 
           const first = data && data.data && data.data[0];
+
+          // 魔搭这类平台即使失败也回 200，错误写在 errors.message 里
+          const apiError = first ? '' : imageApiError(data);
+
+          if (apiError) {
+            throw new Error(apiError);
+          }
+
+          const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
+
+          if (!first && taskId) {
+            return await pollAsyncImage(modelRow, headers, taskId);
+          }
 
           if (!first) {
             throw new Error('生图接口返回里没有图片');
