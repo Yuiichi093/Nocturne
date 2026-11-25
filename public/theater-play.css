@@ -967,3 +967,8 @@ html[data-theme="dark"] .bottom-nav {
   font-size: 13px;
   text-align: center;
 }
+
+/* 插画容器给浅底色：图本身偏暗时也能分清是黑图还是没加载出来 */
+.scene-image {
+  background: var(--fill);
+}

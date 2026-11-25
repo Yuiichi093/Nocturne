@@ -232,7 +232,7 @@
     </div>
 
     <div class="row">
-      <span>设为默认模型</span>
+      <span>设为文字模型（聊天主力）</span>
       <input id="is_default" type="checkbox">
     </div>
 
@@ -333,13 +333,14 @@
                   ${escapeHtml(row.base_url)}
                 </div>
               </div>
-              ${row.is_default ? '<span class="badge">默认</span>' : ''}
+              ${row.is_default ? '<span class="badge">文字</span>' : ''}
               ${row.is_vision ? '<span class="badge">看图</span>' : ''}
               ${row.is_image ? '<span class="badge">生图</span>' : ''}
               ${row.has_key ? '' : '<span class="badge warn">没 Key</span>'}
             </div>
             <div class="item-actions">
               <button class="ghost" data-test="${row.id}" type="button">测试</button>
+              <button class="ghost${row.is_default ? ' on' : ''}" data-default="${row.id}" data-on="${row.is_default ? 1 : 0}" type="button">文字</button>
               <button class="ghost${row.is_vision ? ' on' : ''}" data-vision="${row.id}" data-on="${row.is_vision ? 1 : 0}" type="button">看图</button>
               <button class="ghost${row.is_image ? ' on' : ''}" data-image="${row.id}" data-on="${row.is_image ? 1 : 0}" type="button">生图</button>
               ${row.has_key ? '' : '<button class="ghost key" data-key="' + row.id + '" type="button">补填 Key</button>'}
@@ -451,6 +452,7 @@
       const keyId = event.target.dataset.key;
       const visionId = event.target.dataset.vision;
       const imageId = event.target.dataset.image;
+      const defaultId = event.target.dataset.default;
 
       if (testId) {
         try {
@@ -462,6 +464,27 @@
           setStatus(/\n/.test(reply) ? reply : '连接成功：' + reply);
         } catch (error) {
           setStatus('测试失败：' + error.message);
+        }
+      }
+
+      if (defaultId) {
+        // 文字模型只能有一个：设了它就自动把别的取消
+        const turningOn = event.target.dataset.on === '1' ? 0 : 1;
+
+        try {
+          await api('/api/models/' + defaultId, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_default: turningOn })
+          });
+          setStatus(
+            turningOn
+              ? '已设为文字与思考模型，别的模型自动取消默认。'
+              : '已取消文字模型，聊天会按保存顺序挑一个用。'
+          );
+          await loadModels();
+        } catch (error) {
+          setStatus('设置失败：' + error.message);
         }
       }
 
