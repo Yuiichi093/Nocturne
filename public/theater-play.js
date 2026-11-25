@@ -468,6 +468,19 @@
       image.alt = message.content || '插画';
       image.loading = 'lazy';
       image.dataset.sceneImage = String(message.image_url);
+
+      // 加载失败时别留一块黑，直接说清楚，并给个重试的入口
+      image.addEventListener('error', () => {
+        card.classList.add('scene-image-broken');
+
+        if (card.querySelector('.scene-image-error')) return;
+
+        const hint = document.createElement('div');
+        hint.className = 'scene-image-error';
+        hint.textContent = '这张图打不开（可能是文件坏了或格式不对）。删掉重画一张就行';
+        card.insertBefore(hint, image);
+      });
+
       card.appendChild(image);
 
       if (message.content) {

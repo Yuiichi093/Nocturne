@@ -682,6 +682,12 @@ function register(app, db) {
     let editAnswer = '';
     let editError = '';
 
+    // 5xx 是服务端临时抽风，不代表不支持带图：退避后重试一次再说
+    const editAttempts = [0, 4000];
+
+    for (const waitMs of editAttempts) {
+      if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+
     for (const url of editUrls) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 120000);
@@ -735,12 +741,16 @@ function register(app, db) {
           break;
         }
 
-        break;
+        // 5xx 留着重试，其它错误就到这
+        if (response.status < 500) break;
       } catch (error) {
         editError = error.name === 'AbortError' ? '请求超时' : error.message;
       } finally {
         clearTimeout(timer);
       }
+    }
+
+      if (editAnswer) break;
     }
 
     if (editAnswer) {

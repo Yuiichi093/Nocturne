@@ -949,3 +949,21 @@ html[data-theme="dark"] .bottom-nav {
   font-size: 12px;
   text-align: center;
 }
+
+/* 插画加载失败：不要只留一块黑 */
+.scene-image.scene-image-broken {
+  background: var(--fill);
+  min-height: 120px;
+  border: 1px dashed var(--line);
+}
+
+.scene-image.scene-image-broken img {
+  display: none;
+}
+
+.scene-image-error {
+  padding: 28px 16px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
