@@ -3,6 +3,11 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号按 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.31] - 2026-11-25
+
+### 修复
+- 魔搭异步任务的图片在 `output_images` 里（`input.outputs` 是空对象），现在能认出来并下载。
+
 ## [1.2.30] - 2026-11-25
 
 ### 修复

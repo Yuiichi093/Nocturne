@@ -285,6 +285,13 @@ function register(app, db) {
     push(data && data.image_url);
     push(data && data.url);
 
+    // 魔搭实际返回：output_images: ["https://..."]，input.outputs 是空对象
+    if (Array.isArray(data && data.output_images)) {
+      data.output_images.forEach(push);
+    }
+
+    push(data && data.output_image);
+
     const rows = data && data.data;
 
     if (Array.isArray(rows)) {
