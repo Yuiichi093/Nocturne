@@ -204,14 +204,17 @@ function register(app, db) {
 
   // 魔搭这类平台：提交后不直接给图，只回一个 task_id，得再轮询任务接口。
   // 轮询时带上 X-ModelScope-Task-Type: image_generation，否则拿不到结果。
-  async function pollAsyncImage(modelRow, headers, taskId) {
+  async function pollAsyncImage(modelRow, headers, taskId, waitMsOverride) {
     const base = cleanText(modelRow.base_url).replace(/\/+$/, '');
     const root = base.replace(/\/v\d+$/, '');
     const candidates = [base + '/tasks/' + encodeURIComponent(taskId)];
     if (root !== base) candidates.push(root + '/v1/tasks/' + encodeURIComponent(taskId));
 
     const pollHeaders = { ...headers, 'X-ModelScope-Task-Type': 'image_generation' };
-    const deadline = Date.now() + 170000;
+
+    // 带参考图的单子普遍更慢，超时等太久；纯文字的还是两分半
+    const waitMs = Number(waitMsOverride || process.env.ROLEPHONE_POLL_MS || 0) || 170000;
+    const deadline = Date.now() + waitMs;
     let lastStatus = '';
 
     while (Date.now() < deadline) {
@@ -413,8 +416,10 @@ function register(app, db) {
           const text = await response.text();
 
           if (!response.ok) {
-            if (response.status === 404 || response.status === 405) continue;
-            lastError = text.slice(0, 160);
+            // 这个地址已经通了（只是拒了带图请求），别再换别的地址重提，免得排队两单
+            lastError = response.status === 404 || response.status === 405
+              ? '这家不接受带参考图的请求（HTTP ' + response.status + '）'
+              : text.slice(0, 160);
             break;
           }
 
@@ -432,7 +437,8 @@ function register(app, db) {
           const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
 
           if (taskId) {
-            return { url: await pollAsyncImage(modelRow, headers, taskId) };
+            // 带参考图的单子比纯文字慢，多给一点时间
+            return { url: await pollAsyncImage(modelRow, headers, taskId, 280000) };
           }
 
           const apiError = imageApiError(data);
@@ -462,6 +468,17 @@ function register(app, db) {
     throw new Error(lastError || '参考图这条路没走通');
   }
 
+  // 平台一次只收一张图时，没法把多张真拼成一张（这里不带图像编码依赖），
+  // 退而求其次：挑第一张当身份参考，其余的风格/服装写进提示词里。
+  function referenceSheetFallback(refs) {
+    if (refs.length < 2) return '';
+
+    return '另外还有 ' + (refs.length - 1) + ' 张参考图分别参考服装和气质，' +
+      '以第一张的脸为主。';
+  }
+
+  // 1x1 小图探参考图接口时用；拼图不参与探测
+
   // 带参考图的请求：OpenAI 的 /images/edits 走 multipart
   async function requestImageWithReference(modelRow, prompt, size, refs) {
     const headers = { ...parseHeaders(modelRow.extra_headers) };
@@ -480,76 +497,89 @@ function register(app, db) {
     // 有的家只认 image，有的只认 image[]。以前同一张图两个字段一起给，
     // 有些中转会当成重复参数直接 400，所以改成两次尝试：
     // 第一次所有参考图都用 image，失败再全部用 image[]。
+    // 有的家（Agnes 这类）只认单数 image 且一次只能一张，多张会 400；
+    // 所以按「全部一起 / 只第一张」×「image / image[]」四种组合依次试
     const fieldVariants = ['image', 'image[]'];
     let lastError = '';
+
+    // 顺序：原样多张 → 只塞第一张（+ 提示词说明还参考了别的图）
+    const pickedSets = refs.length > 1 ? [refs, refs.slice(0, 1)] : [refs];
 
     for (const url of urls) {
       const attemptErrors = [];
 
-      for (const field of fieldVariants) {
-        const form = new FormData();
-        form.append('model', modelRow.model);
-        form.append('prompt', referencePrompt);
-        form.append('n', '1');
-        form.append('size', size || '1024x1024');
+      for (const picked of pickedSets) {
+        for (const field of fieldVariants) {
+          // 这批一张都没带上就别发空表单了
+          if (!picked.length) continue;
 
-        refs.forEach((ref) => {
-          const buffer = fs.readFileSync(ref.file);
-          const blob = new Blob([buffer], { type: ref.mime });
-          form.append(field, blob, ref.name);
-        });
+          const form = new FormData();
+          form.append('model', modelRow.model);
+          form.append('prompt', picked.length < refs.length
+            ? referencePrompt + referenceSheetFallback(refs)
+            : referencePrompt);
+          form.append('n', '1');
+          form.append('size', size || '1024x1024');
 
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 180000);
-
-        try {
-          const response = await fetch(url, {
-            method: 'POST',
-            headers,
-            body: form,
-            signal: controller.signal
+          picked.forEach((ref) => {
+            const buffer = fs.readFileSync(ref.file);
+            const blob = new Blob([buffer], { type: ref.mime });
+            form.append(field, blob, ref.name);
           });
 
-          const text = await response.text();
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 180000);
 
-          if (response.ok) {
-            let data = null;
-            try {
-              data = JSON.parse(text);
-            } catch (e) {}
+          try {
+            const response = await fetch(url, {
+              method: 'POST',
+              headers,
+              body: form,
+              signal: controller.signal
+            });
 
-            const first = data && data.data && data.data[0];
+            const text = await response.text();
 
-            if (first && first.b64_json) {
-              return { url: saveImage(Buffer.from(first.b64_json, 'base64'), '.png') };
-            }
-
-            if (first && first.url) {
-              const imageResponse = await fetch(first.url);
-              const buffer = Buffer.from(await imageResponse.arrayBuffer());
-              return { url: saveImage(buffer, '.png') };
-            }
-
-            const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
-
-            if (taskId) {
+            if (response.ok) {
+              let data = null;
               try {
-                return { url: await pollAsyncImage(modelRow, headers, taskId) };
-              } catch (error) {
-                attemptErrors.push(field + '：' + truncated(error.message));
-                continue;
-              }
-            }
+                data = JSON.parse(text);
+              } catch (e) {}
 
-            attemptErrors.push(field + '：参考图接口返回格式不认识');
-          } else {
-            attemptErrors.push(field + '：' + (truncated(text) || ('HTTP ' + response.status)));
+              const first = data && data.data && data.data[0];
+
+              if (first && first.b64_json) {
+                return { url: saveImage(Buffer.from(first.b64_json, 'base64'), '.png') };
+              }
+
+              if (first && first.url) {
+                const imageResponse = await fetch(first.url);
+                const buffer = Buffer.from(await imageResponse.arrayBuffer());
+                return { url: saveImage(buffer, '.png') };
+              }
+
+              const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
+
+              if (taskId) {
+                try {
+                  return { url: await pollAsyncImage(modelRow, headers, taskId) };
+                } catch (error) {
+                  attemptErrors.push(field + '：' + truncated(error.message));
+                  continue;
+                }
+              }
+
+              attemptErrors.push(field + '(' + picked.length + '张)：参考图接口返回格式不认识');
+            } else {
+              attemptErrors.push(field + '(' + picked.length + '张)：' +
+                (truncated(text) || ('HTTP ' + response.status)));
+            }
+          } catch (error) {
+            if (error.name === 'AbortError') throw new Error('生图超时');
+            attemptErrors.push(field + '：' + truncated(error.message));
+          } finally {
+            clearTimeout(timer);
           }
-        } catch (error) {
-          if (error.name === 'AbortError') throw new Error('生图超时');
-          attemptErrors.push(field + '：' + truncated(error.message));
-        } finally {
-          clearTimeout(timer);
         }
       }
 
@@ -657,6 +687,8 @@ function register(app, db) {
       const timer = setTimeout(() => controller.abort(), 120000);
 
       try {
+        // 只给单数 image：以前两个字段一起给，有些家（Agnes）会当成重复参数直接 400，
+        // 于是误判成「不支持带图」
         const form = new FormData();
         form.append('model', modelRow.model);
         form.append('prompt', '把这张图的背景改成浅蓝色');
@@ -664,7 +696,6 @@ function register(app, db) {
         form.append('size', '1024x1024');
         const blob = new Blob([TINY_PNG], { type: 'image/png' });
         form.append('image', blob, 'ref.png');
-        form.append('image[]', blob, 'ref.png');
 
         const response = await fetch(url, {
           method: 'POST',
@@ -700,7 +731,7 @@ function register(app, db) {
         }
 
         if (response.status === 400) {
-          editError = '这家不支持带图改图（400）：' + text.slice(0, 200);
+          editError = '带图请求被拒（400）：' + text.slice(0, 160);
           break;
         }
 
