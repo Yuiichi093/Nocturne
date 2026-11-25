@@ -52,10 +52,25 @@ function register(app, db) {
     return [clean + '/v1' + tail, clean + tail];
   }
 
+  // 看文件头认格式：不以 PNG/JPEG/WebP 开头的基本都是坏图或错误页
+  function sniffImageExt(buffer) {
+    if (!buffer || buffer.length < 12) return '';
+
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return '.png';
+    if (buffer[0] === 0xff && buffer[1] === 0xd8) return '.jpg';
+    if (buffer.slice(0, 4).toString('latin1') === 'RIFF' &&
+        buffer.slice(8, 12).toString('latin1') === 'WEBP') return '.webp';
+
+    return '';
+  }
+
   function saveImage(buffer, ext) {
-    const safeExt = ['.png', '.jpg', '.jpeg', '.webp'].includes(ext)
+    // 以真实文件头为准，避免把 jpg 存成 .png 打不开
+    const sniffed = sniffImageExt(buffer);
+
+    const safeExt = sniffed || ([ '.png', '.jpg', '.jpeg', '.webp' ].includes(ext)
       ? ext
-      : '.png';
+      : '.png');
     const name = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + safeExt;
     fs.writeFileSync(path.join(uploadDir(), name), buffer);
     return '/uploads/' + name;
@@ -238,6 +253,12 @@ function register(app, db) {
 
             const imageResponse = await fetch(link);
             const buffer = Buffer.from(await imageResponse.arrayBuffer());
+
+            // 有时候「成功」了但图是空的：别把 0 字节当成一张黑图存下来
+            if (!buffer.length) {
+              throw new Error('任务成功但下载回来的图是空的：' + link.slice(0, 120));
+            }
+
             return saveImage(buffer, '.png');
           }
 
@@ -775,6 +796,11 @@ function register(app, db) {
           if (first.url) {
             const imageResponse = await fetch(first.url);
             const buffer = Buffer.from(await imageResponse.arrayBuffer());
+
+            if (!buffer.length) {
+              throw new Error('图下载回来是空的：' + String(first.url).slice(0, 120));
+            }
+
             return saveImage(buffer, '.png');
           }
 
