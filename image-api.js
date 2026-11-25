@@ -254,73 +254,120 @@ function register(app, db) {
 
   // 没有 /images/edits 的平台（魔搭这类）：参考图可以走异步任务 + image_url 参数。
   // 先提交一个任务，再轮询拿结果；这条路不通就老实退回纯文字生成。
-  async function requestImageWithReferenceTask(modelRow, headers, prompt, size, refs) {
-    // 参考图要先变成公网能取到的地址；我们的 /uploads 是手机局域网地址，平台访问不到，
-    // 所以只对 http(s) 直链的参考图做这个尝试
-    const publicRefs = refs
+  // 参考图优先走「内嵌 base64」：图只出现在这一次请求里，不会变成任何公开地址。
+  // 平台不认 base64 时才退回公网链接（手机本地的 /uploads 平台本来就取不到）。
+  function refToImageUrl(ref) {
+    const direct = cleanText(ref.url);
+
+    if (/^https?:\/\//i.test(direct) && !/\/uploads\//.test(direct)) {
+      return direct;
+    }
+
+    try {
+      const buffer = fs.readFileSync(ref.file);
+      const mime = cleanText(ref.mime) || 'image/png';
+      return 'data:' + mime + ';base64,' + buffer.toString('base64');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  // 一层参考图 = 一组 image_url（要么全是 base64，要么全是链接）
+  function referenceCandidates(refs) {
+    const embedded = refs.map(refToImageUrl).filter((url) => url.startsWith('data:'));
+
+    if (embedded.length) return [embedded];
+
+    const linked = refs
       .map((ref) => cleanText(ref.url))
       .filter((url) => /^https?:\/\//i.test(url));
 
-    if (!publicRefs.length) {
-      throw new Error('参考图是本地文件，这家平台取不到；只有公网图片链接才能当参考图');
+    return linked.length ? [linked] : [];
+  }
+
+  async function requestImageWithReferenceTask(modelRow, headers, prompt, size, refs) {
+    const sets = referenceCandidates(refs);
+
+    if (!sets.length) {
+      throw new Error('参考图读不出来，没法带图生成');
     }
 
-    const payload = {
-      model: modelRow.model,
-      prompt,
-      n: 1,
-      size: size || '1024x1024',
-      image_url: publicRefs.length === 1 ? publicRefs[0] : publicRefs
-    };
+    let lastError = '';
 
-    for (const url of buildUrls(modelRow.base_url, 'images/generations')) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 60000);
+    for (const imageUrls of sets) {
+      const payload = {
+        model: modelRow.model,
+        prompt,
+        n: 1,
+        size: size || '1024x1024',
+        image_url: imageUrls.length === 1 ? imageUrls[0] : imageUrls
+      };
 
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
+      // base64 的那份要报错时别把整串贴回界面
+      const isEmbedded = imageUrls[0].startsWith('data:');
 
-        const text = await response.text();
+      for (const url of buildUrls(modelRow.base_url, 'images/generations')) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 60000);
 
-        if (!response.ok) {
-          if (response.status === 404 || response.status === 405) continue;
-          throw new Error(text.slice(0, 160));
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+          });
+
+          const text = await response.text();
+
+          if (!response.ok) {
+            if (response.status === 404 || response.status === 405) continue;
+            lastError = text.slice(0, 160);
+            break;
+          }
+
+          let data = null;
+          try { data = JSON.parse(text); } catch (e) {}
+
+          const first = data && data.data && data.data[0];
+
+          if (first && first.url) {
+            const imageResponse = await fetch(first.url);
+            const buffer = Buffer.from(await imageResponse.arrayBuffer());
+            return { url: saveImage(buffer, '.png') };
+          }
+
+          const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
+
+          if (taskId) {
+            return { url: await pollAsyncImage(modelRow, headers, taskId) };
+          }
+
+          const apiError = imageApiError(data);
+
+          if (apiError) {
+            lastError = isEmbedded ? '平台不认内嵌图片：' + apiError : apiError;
+          }
+        } catch (error) {
+          if (error.name === 'AbortError') {
+            lastError = '参考图提交超时';
+            break;
+          }
+
+          // 任务已经跑完的结论不用再换别的形式重试
+          if (/任务/.test(error.message || '')) throw error;
+
+          lastError = error.message || lastError;
+          break;
+        } finally {
+          clearTimeout(timer);
         }
-
-        let data = null;
-        try { data = JSON.parse(text); } catch (e) {}
-
-        const first = data && data.data && data.data[0];
-
-        if (first && first.url) {
-          const imageResponse = await fetch(first.url);
-          const buffer = Buffer.from(await imageResponse.arrayBuffer());
-          return { url: saveImage(buffer, '.png') };
-        }
-
-        const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
-
-        if (taskId) {
-          return { url: await pollAsyncImage(modelRow, headers, taskId) };
-        }
-
-        const apiError = imageApiError(data);
-
-        if (apiError) throw new Error(apiError);
-      } catch (error) {
-        if (error.name === 'AbortError') throw new Error('参考图提交超时');
-        throw error;
-      } finally {
-        clearTimeout(timer);
       }
+
+      // base64 不行就换链接试一次；两种都不行就传最后一次的错
     }
 
-    throw new Error('这家没有 /images/edits 接口');
+    throw new Error(lastError || '参考图这条路没走通');
   }
 
   // 带参考图的请求：OpenAI 的 /images/edits 走 multipart
