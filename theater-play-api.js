@@ -446,7 +446,34 @@ module.exports = function (app, db) {
       if (used) sources.push(tag);
     }
 
-    addAll(safeJsonParse(session.identity_refs, []).map(refImageUrl).filter(Boolean), 'identity');
+    // 老会话（1.2.20 之前建的）身上没存 identity_refs，
+    // 这时候回剧本里按身份名把那张身份卡的参考图捞出来，不然她会以为设定图没用上
+    let identityRefs = safeJsonParse(session.identity_refs, [])
+      .map(refImageUrl)
+      .filter(Boolean);
+    let identityTag = 'identity';
+
+    if (!identityRefs.length && cleanText(session.identity_name)) {
+      const script = db.prepare(
+        'SELECT identities_json FROM theater_scripts WHERE id = ?'
+      ).get(session.script_id);
+
+      const identities = script
+        ? safeJsonParse(script.identities_json, [])
+        : [];
+      const wanted = cleanText(session.identity_name);
+
+      const hit = (Array.isArray(identities) ? identities : []).find(
+        (item) => cleanText(item && item.name) === wanted
+      );
+
+      if (hit && Array.isArray(hit.ref_images)) {
+        identityRefs = hit.ref_images.map(refImageUrl).filter(Boolean);
+        if (identityRefs.length) identityTag = 'identity:script';
+      }
+    }
+
+    addAll(identityRefs, identityTag);
     addAll(characterRefImages(characterId), 'character');
 
     return { refImages: merged, sources };
@@ -1661,6 +1688,9 @@ module.exports = function (app, db) {
     if (sceneRefs.refImages.length) {
       meta.reference_sources = sceneRefs.sources.slice();
       meta.reference_count = sceneRefs.refImages.length;
+    } else {
+      // 一张都没有：前端据此说一句「这次没有参考图」，省得她一直猜
+      meta.reference_count = 0;
     }
 
     // 有参考图却没套上时，把原因一起留在消息里，前端好如实告诉她

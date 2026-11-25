@@ -402,6 +402,17 @@
             note.className = 'image-note image-note-inline';
             note.textContent = '这次没套上参考图：' + describeImageError(imageMeta.reference_error);
             block.appendChild(note);
+          } else if (Number(imageMeta.reference_count) === 0) {
+            // 压根没有参考图可用：说清楚，省得她以为是设定图没生效
+            const note = document.createElement('div');
+            note.className = 'image-note image-note-inline';
+            note.textContent = '这次没有参考图来对着画（身份卡和角色都没挂设定图）';
+            block.appendChild(note);
+          } else if (Number(imageMeta.reference_count) > 0) {
+            const note = document.createElement('div');
+            note.className = 'image-note image-note-inline';
+            note.textContent = '参考图用了 ' + Number(imageMeta.reference_count) + ' 张';
+            block.appendChild(note);
           }
         } else if (message.content) {
           const text = document.createElement('div');
