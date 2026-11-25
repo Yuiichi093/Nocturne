@@ -626,6 +626,7 @@ html[data-theme="dark"] .bottom-nav {
 }
 
 .scene-image {
+  position: relative;
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -679,6 +680,81 @@ html[data-theme="dark"] .bottom-nav {
   color: var(--muted);
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* 插画的隐藏 / 删除小胶囊：半透明贴右上角，不挡画面中心 */
+.image-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 6px;
+  z-index: 2;
+}
+
+.image-action {
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(20, 20, 24, 0.46);
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.image-action:active {
+  background: rgba(20, 20, 24, 0.68);
+}
+
+/* 没图只有文字时，胶囊放到底下，不叠字 */
+.image-actions-plain {
+  position: static;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.image-actions-plain .image-action {
+  border-color: var(--line);
+  background: var(--fill);
+  color: var(--muted);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.image-block-hidden {
+  margin: 14px 0;
+}
+
+.image-block-hidden .scene-image img {
+  opacity: 0.9;
+}
+
+/* 隐藏后收成一行灰字，点一下展开 */
+.image-hidden-line {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.image-hidden-line:active {
+  background: var(--fill);
+}
+
+.image-hidden-line-expanded {
+  margin-bottom: 8px;
+  border-style: solid;
+  opacity: 0.85;
 }
 
 /* 生图面板 */
@@ -857,4 +933,19 @@ html[data-theme="dark"] .bottom-nav {
 
 #historyBranchList .sheet-btn {
   margin-top: 14px;
+}
+
+/* 画图占位块下面那行「先去玩，画好了自己贴上来」 */
+.image-note.draw-background {
+  display: block;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
 }

@@ -26,6 +26,7 @@
   let cardElements = {};        // narrationId -> 卡片 DOM，翻页/重绘用
   let sending = false;
   let drawing = false;
+  let expandedHiddenImages = {};  // 已隐藏的插画临时展开看一眼（不落库）
 
   // 剧情走向存在本地，换页面也不会丢
   const DIRECTION_KEY = 'theater-direction-' + sessionId;
@@ -310,6 +311,206 @@
     return index;
   }
 
+  // ---------- 插画消息：隐藏 / 显示 / 删除 ----------
+  function imageMetaOf(message) {
+    try {
+      const meta = message && message.meta_json ? JSON.parse(message.meta_json) : {};
+      return meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function imageActionButton(label, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'image-action';
+    button.textContent = label;
+    button.addEventListener('click', (event) => {
+      if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  function showImageActionError(block, message) {
+    if (!block) return;
+    const note = document.createElement('div');
+    note.className = 'image-note image-note-inline';
+    note.textContent = '没操作成功：' + (message || '再试一次');
+    block.appendChild(note);
+    setTimeout(() => {
+      if (note.parentNode) note.parentNode.removeChild(note);
+    }, 6000);
+  }
+
+  async function setImageHidden(message, hidden, block) {
+    const id = Number(message.id);
+
+    try {
+      const response = await fetch(
+        '/api/theater/messages/' + id + (hidden ? '/hide' : '/unhide'),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: Number(sessionId) })
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.ok) {
+        throw new Error((data && data.error) || '操作失败');
+      }
+
+      // 用后端回来的 meta_json，保持一致；没有就按本地算一份
+      if (data.message && data.message.meta_json) {
+        message.meta_json = data.message.meta_json;
+      } else {
+        const meta = imageMetaOf(message);
+        if (hidden) meta.hidden = true; else delete meta.hidden;
+        message.meta_json = JSON.stringify(meta);
+      }
+
+      delete expandedHiddenImages[id];
+      repaintStory();
+    } catch (error) {
+      showImageActionError(block, error.message);
+    }
+  }
+
+  async function deleteSceneImage(message, block) {
+    if (!confirm('删除这张插画？删了就找不回来了')) return;
+
+    const id = Number(message.id);
+
+    try {
+      const response = await fetch('/api/theater/messages/' + id, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: Number(sessionId) })
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.ok) {
+        throw new Error((data && data.error) || '删除失败');
+      }
+
+      messages = messages.filter((item) => Number(item.id) !== id);
+      delete expandedHiddenImages[id];
+      repaintStory();
+    } catch (error) {
+      showImageActionError(block, error.message);
+    }
+  }
+
+  function buildImageToolbar(message, block) {
+    const hidden = imageMetaOf(message).hidden === true;
+    const toolbar = document.createElement('div');
+    toolbar.className = 'image-actions';
+
+    toolbar.appendChild(imageActionButton(hidden ? '👁 显示' : '👁 隐藏', () => {
+      setImageHidden(message, !hidden, block);
+    }));
+    toolbar.appendChild(imageActionButton('🗑 删除', () => {
+      deleteSceneImage(message, block);
+    }));
+
+    return toolbar;
+  }
+
+  // 一张插画：正常时图 + 描述 + 右上角两个小胶囊；
+  // 隐藏后整块收成一行灰字，点一下展开看一眼，再点收起。
+  function buildImageBlock(message) {
+    const meta = imageMetaOf(message);
+    const hidden = meta.hidden === true;
+    const id = Number(message.id);
+    const expanded = hidden && expandedHiddenImages[id] === true;
+
+    if (!hidden && !message.image_url && !message.content) return null;
+
+    const block = document.createElement('div');
+    block.className = 'image-block';
+    block.dataset.messageId = String(id);
+
+    if (hidden) block.classList.add('image-block-hidden');
+
+    if (hidden && !expanded) {
+      const line = document.createElement('button');
+      line.type = 'button';
+      line.className = 'image-hidden-line';
+      line.textContent = '这张插画已隐藏';
+      line.addEventListener('click', () => {
+        expandedHiddenImages[id] = true;
+        repaintStory();
+      });
+      block.appendChild(line);
+      return block;
+    }
+
+    if (hidden && expanded) {
+      const line = document.createElement('button');
+      line.type = 'button';
+      line.className = 'image-hidden-line image-hidden-line-expanded';
+      line.textContent = '这张插画已隐藏（点一下收起）';
+      line.addEventListener('click', () => {
+        delete expandedHiddenImages[id];
+        repaintStory();
+      });
+      block.appendChild(line);
+    }
+
+    if (message.image_url) {
+      const card = document.createElement('figure');
+      card.className = 'scene-image';
+
+      const image = document.createElement('img');
+      image.src = String(message.image_url);
+      image.alt = message.content || '插画';
+      image.loading = 'lazy';
+      image.dataset.sceneImage = String(message.image_url);
+      card.appendChild(image);
+
+      if (message.content) {
+        const caption = document.createElement('figcaption');
+        caption.textContent = message.content;
+        card.appendChild(caption);
+      }
+
+      card.appendChild(buildImageToolbar(message, block));
+      block.appendChild(card);
+
+      // 有参考图但没套上：如实说一句，别让她以为设定图生效了
+      if (meta.with_reference === false && meta.reference_error) {
+        const note = document.createElement('div');
+        note.className = 'image-note image-note-inline';
+        note.textContent = '这次没套上参考图：' + describeImageError(meta.reference_error);
+        block.appendChild(note);
+      } else if (Number(meta.reference_count) === 0) {
+        // 压根没有参考图可用：把原因说具体，别只写「都没挂」
+        const note = document.createElement('div');
+        note.className = 'image-note image-note-inline';
+        note.textContent = describeMissingReferences(meta.reference_missing);
+        block.appendChild(note);
+      } else if (Number(meta.reference_count) > 0) {
+        const note = document.createElement('div');
+        note.className = 'image-note image-note-inline';
+        note.textContent = '参考图用了 ' + Number(meta.reference_count) + ' 张';
+        block.appendChild(note);
+      }
+    } else if (message.content) {
+      const text = document.createElement('div');
+      text.className = 'image-note';
+      text.textContent = message.content;
+      block.appendChild(text);
+
+      const toolbar = buildImageToolbar(message, block);
+      toolbar.classList.add('image-actions-plain');
+      block.appendChild(toolbar);
+    }
+
+    return block;
+  }
+
   // 每个 role='options' 的消息都渲染成完整卡片（历史步骤也带胶囊 / ✎ / 🗑 / 开分支）；
   // 同一段旁白的多版只画一张卡，显示 stepIndex 指定的那一版。
   function renderStory(options) {
@@ -364,64 +565,11 @@
         return;
       }
 
-      // 生图接口插入的插画消息：图片 + 画面描述
+      // 生图接口插入的插画消息：图片 + 画面描述 + 隐藏/删除
       if (message.role === 'narrator') {
-        const block = document.createElement('div');
-        block.className = 'image-block';
+        const block = buildImageBlock(message);
 
-        let imageMeta = {};
-
-        try {
-          imageMeta = message.meta_json ? JSON.parse(message.meta_json) : {};
-        } catch (e) {
-          imageMeta = {};
-        }
-
-        if (message.image_url) {
-          const card = document.createElement('figure');
-          card.className = 'scene-image';
-
-          const image = document.createElement('img');
-          image.src = String(message.image_url);
-          image.alt = message.content || '插画';
-          image.loading = 'lazy';
-          image.dataset.sceneImage = String(message.image_url);
-          card.appendChild(image);
-
-          if (message.content) {
-            const caption = document.createElement('figcaption');
-            caption.textContent = message.content;
-            card.appendChild(caption);
-          }
-
-          block.appendChild(card);
-
-          // 有参考图但没套上：如实说一句，别让她以为设定图生效了
-          if (imageMeta.with_reference === false && imageMeta.reference_error) {
-            const note = document.createElement('div');
-            note.className = 'image-note image-note-inline';
-            note.textContent = '这次没套上参考图：' + describeImageError(imageMeta.reference_error);
-            block.appendChild(note);
-          } else if (Number(imageMeta.reference_count) === 0) {
-            // 压根没有参考图可用：把原因说具体，别只写「都没挂」
-            const note = document.createElement('div');
-            note.className = 'image-note image-note-inline';
-            note.textContent = describeMissingReferences(imageMeta.reference_missing);
-            block.appendChild(note);
-          } else if (Number(imageMeta.reference_count) > 0) {
-            const note = document.createElement('div');
-            note.className = 'image-note image-note-inline';
-            note.textContent = '参考图用了 ' + Number(imageMeta.reference_count) + ' 张';
-            block.appendChild(note);
-          }
-        } else if (message.content) {
-          const text = document.createElement('div');
-          text.className = 'image-note';
-          text.textContent = message.content;
-          block.appendChild(text);
-        }
-
-        if (block.childNodes.length) story.appendChild(block);
+        if (block) story.appendChild(block);
         return;
       }
 
@@ -801,6 +949,34 @@
     card.textContent = '正在画…';
 
     block.appendChild(card);
+
+    // 出图常常要几十秒，给她一个「先去玩」的口子，别让她干等
+    const skip = document.createElement('button');
+    skip.className = 'image-note image-note-inline draw-background';
+    skip.type = 'button';
+    skip.id = 'drawBackgroundBtn';
+    skip.textContent = '先去玩，画好了自己贴上来 →';
+    skip.addEventListener('click', () => {
+      continuePlayingWhileDrawing();
+    });
+
+    block.appendChild(skip);
+    $('story').appendChild(block);
+    scrollToBottom();
+  }
+
+  // 点了「先去玩」：把弹窗收掉，画还在后台跑，出图会自己贴到剧情里
+  function continuePlayingWhileDrawing() {
+    if (!drawing) return;
+
+    hideDrawing();
+    closeSheets();
+    $('drawStatus').textContent = '';
+
+    const block = document.createElement('div');
+    block.className = 'image-note image-note-inline';
+    block.id = 'drawingNotice';
+    block.textContent = '还在画，画好了会自己贴上来；可以先接着玩';
     $('story').appendChild(block);
     scrollToBottom();
   }
@@ -808,6 +984,11 @@
   function hideDrawing() {
     const block = document.getElementById('drawingBlock');
     if (block) block.remove();
+  }
+
+  function dropDrawingNotice() {
+    const notice = document.getElementById('drawingNotice');
+    if (notice) notice.remove();
   }
 
   function openImage(url) {
@@ -920,8 +1101,42 @@
     return describeImageError(raw) || raw;
   }
 
-  async function generateSceneImage() {
+  // 上一次是兜底描述跑出来的话，把那句原样留着，下次可以直接复用
+  let lastFallbackPrompt = '';
+
+  // 生成时按秒走得动的计时器：一直停在「正在画…」最容易让人以为卡死了
+  let drawTimer = null;
+
+  function startDrawStatus() {
+    const status = $('drawStatus');
+    const startedAt = Date.now();
+
+    stopDrawStatus();
+    status.textContent = '正在画…0 秒';
+
+    drawTimer = setInterval(() => {
+      const seconds = Math.floor((Date.now() - startedAt) / 1000);
+      const hint = seconds > 60
+        ? '（超一分钟了，这一单排在服务商那边，通常还能等到）'
+        : seconds > 25
+          ? '（还在等服务商返回）'
+          : '';
+
+      status.textContent = '正在画…' + seconds + ' 秒' + hint;
+    }, 1000);
+  }
+
+  function stopDrawStatus() {
+    if (drawTimer) {
+      clearInterval(drawTimer);
+      drawTimer = null;
+    }
+  }
+
+  async function generateSceneImage(options) {
     if (drawing) return;
+
+    const background = Boolean(options && options.background);
 
     drawing = true;
 
@@ -929,13 +1144,25 @@
     const original = button.textContent;
     const promptInput = $('drawPrompt');
     const sizeInput = $('drawSize');
+    const typedPrompt = promptInput ? promptInput.value.trim() : '';
+
+    // 上一次是「兜底描述」跑的：这次直接拿那句描述，省掉先让模型写一遍的开销
+    let reusePrompt = '';
+
+    if (!typedPrompt && lastFallbackPrompt) {
+      const answer = confirm('上一次等太久，是因为自动写画面描述超时了。\n这次直接用上次那段描述来画？\n\n' + lastFallbackPrompt.slice(0, 80) + '…');
+
+      if (answer) reusePrompt = lastFallbackPrompt;
+    }
 
     button.disabled = true;
-    button.textContent = '画图中…';
+    button.textContent = background ? '继续画…' : '画图中…';
     $('drawStatus').classList.remove('error');
-    $('drawStatus').textContent = '正在画…';
+    startDrawStatus();
 
-    showDrawing();
+    // 后台接着画的时候不要把「正在画…」塞进剧情区，
+    // 不然上面那次续写成功一刷新，占位块就留在中间不走了
+    if (!background) showDrawing();
 
     try {
       const response = await fetch(
@@ -944,7 +1171,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            prompt: promptInput ? promptInput.value.trim() : '',
+            prompt: reusePrompt || typedPrompt,
             size: sizeInput ? sizeInput.value : '1024x1024'
           })
         }
@@ -956,16 +1183,31 @@
         throw new Error(data.error || '生成失败');
       }
 
+      // 兜底跑的就把那句描述记下来，下次可以复用
+      if (data.auto_prompted && data.auto_prompt_error) {
+        lastFallbackPrompt = String(data.prompt || '').trim();
+      } else {
+        lastFallbackPrompt = '';
+      }
+
       if (promptInput) promptInput.value = '';
 
       hideDrawing();
+      dropDrawingNotice();
       closeSheets();
       await loadMessages();
     } catch (error) {
       hideDrawing();
-      $('drawStatus').classList.add('error');
-      $('drawStatus').textContent = '生成失败：' + friendlyImageError(error.message);
+      dropDrawingNotice();
+
+      // 她可能早就不看弹窗了：后台画失败就安静收场，别拦着玩
+      if (!background) {
+        $('drawStatus').classList.add('error');
+        $('drawStatus').textContent = '生成失败：' + friendlyImageError(error.message);
+      }
+
     } finally {
+      stopDrawStatus();
       drawing = false;
       button.disabled = false;
       button.textContent = original;

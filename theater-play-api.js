@@ -1394,7 +1394,7 @@ module.exports = function (app, db) {
     const costSettings = readTheaterCostSettings();
 
     const history = db.prepare(`
-      SELECT role, content, image_url FROM theater_messages
+      SELECT role, content, image_url, meta_json FROM theater_messages
       WHERE session_id = ?
       ORDER BY id DESC
       LIMIT ?
@@ -1501,11 +1501,16 @@ module.exports = function (app, db) {
       } else if (row.role === 'dice') {
         messages.push({ role: 'system', content: '[投掷结果] ' + content });
       } else if (row.role === 'narrator') {
-        // 之前生成的插画只作为画面参考，不进正文
-        messages.push({
-          role: 'system',
-          content: '[本段插画] ' + String(content || '').slice(0, 200)
-        });
+        // 被隐藏的插画是她明确否定的那张，别再喂给模型带偏画面
+        const imageMeta = safeJsonParse(row.meta_json, {});
+
+        if (!(imageMeta && imageMeta.hidden === true)) {
+          // 之前生成的插画只作为画面参考，不进正文
+          messages.push({
+            role: 'system',
+            content: '[本段插画] ' + String(content || '').slice(0, 200)
+          });
+        }
       }
     });
 
@@ -1658,6 +1663,7 @@ module.exports = function (app, db) {
 
     let prompt = cleanText(body.prompt).slice(0, 400);
     let autoPrompted = false;
+    let autoPromptError = '';
 
     // 不写描述就让模型按最近剧情自己写一句画面
     if (!prompt) {
@@ -1689,6 +1695,8 @@ module.exports = function (app, db) {
 
         prompt = fallback;
         autoPrompted = true;
+        // 兜底成功也把原因带回去：下次生成可以直接复用上一句描述，省掉这一步
+        autoPromptError = cleanText(error && error.message).slice(0, 160);
       }
     }
 
@@ -1783,6 +1791,7 @@ module.exports = function (app, db) {
       message,
       prompt,
       auto_prompted: autoPrompted,
+      auto_prompt_error: autoPromptError,
       with_reference: withReference
     };
 
@@ -1791,5 +1800,87 @@ module.exports = function (app, db) {
     }
 
     res.json(imageResponse);
+  });
+
+  // ---------- 插画消息：隐藏 / 显示 / 删除 ----------
+  // 插画 = role='narrator' 的行，meta_json 里可能挂着 hidden。
+  // meta_json 可能是空串或坏 JSON：读不出当空对象，写的时候也照写不误，别 500。
+  function narratorMessageFor(id, sessionId) {
+    const messageId = Number(id);
+
+    if (!Number.isInteger(messageId) || messageId <= 0) return null;
+
+    const message = db.prepare('SELECT * FROM theater_messages WHERE id = ?')
+      .get(messageId);
+
+    if (!message || String(message.role) !== 'narrator') return null;
+
+    // 会话必须在当前世界里；前端带的 session_id 也必须对得上
+    const session = db.prepare('SELECT id, world_id FROM theater_sessions WHERE id = ?')
+      .get(message.session_id);
+
+    if (!session) return null;
+
+    if (Number(session.world_id || 0) !== Number(getActiveWorldId() || 0)) return null;
+
+    // 前端会带当前会话 id；带了就必须对得上，免得改到别的会话的插画
+    const wanted = Number(sessionId) || 0;
+
+    if (wanted && Number(message.session_id) !== wanted) return null;
+
+    return message;
+  }
+
+  function writeNarratorMeta(message, mutate) {
+    const meta = safeJsonParse(message.meta_json, {});
+
+    mutate(meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {});
+
+    const value = JSON.stringify(meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {});
+    db.prepare('UPDATE theater_messages SET meta_json = ? WHERE id = ?')
+      .run(value, message.id);
+
+    return db.prepare('SELECT * FROM theater_messages WHERE id = ?').get(message.id);
+  }
+
+  function hideRoute(hidden) {
+    return (req, res) => {
+      const body = req.body || {};
+      const message = narratorMessageFor(
+        req.params.id,
+        body.session_id || req.query.session_id
+      );
+
+      if (!message) {
+        return res.status(404).json({ error: '这条插画不存在' });
+      }
+
+      const updated = writeNarratorMeta(message, (meta) => {
+        if (hidden) meta.hidden = true;
+        else delete meta.hidden;
+      });
+
+      res.json({ ok: true, hidden, message: updated });
+    };
+  }
+
+  app.post('/api/theater/messages/:id/hide', hideRoute(true));
+  app.post('/api/theater/messages/:id/unhide', hideRoute(false));
+
+  app.delete('/api/theater/messages/:id', (req, res) => {
+    const body = req.body || {};
+    const message = narratorMessageFor(
+      req.params.id,
+      body.session_id || req.query.session_id
+    );
+
+    if (!message) {
+      return res.status(404).json({ error: '这条插画不存在' });
+    }
+
+    db.prepare('DELETE FROM theater_messages WHERE id = ? AND role = \'narrator\'')
+      .run(message.id);
+
+    res.json({ ok: true, deleted: true, id: Number(message.id) });
   });
 };
