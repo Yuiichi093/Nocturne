@@ -3,6 +3,14 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号按 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.28] - 2026-11-25
+
+### 新增
+- 没有 `/images/edits` 的平台（魔搭这类），参考图改走「异步任务 + image_url」：
+  /images/edits 不通时自动再试一次带 image_url 的提交，成功就按异步任务轮询取图。
+  目前只对公网 http(s) 图片链接有效（手机本地的 /uploads 平台取不到）。
+- 模型测试里不再直接判「参考图用不了」，会说明还能走 image_url 那条路。
+
 ## [1.2.27] - 2026-11-25
 
 ### 新增

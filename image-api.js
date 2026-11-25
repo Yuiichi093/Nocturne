@@ -67,6 +67,8 @@ function register(app, db) {
 
     if (!clean) return null;
 
+    const original = clean;
+
     // 老数据里可能存的是 http 开头的完整地址，取 pathname 再判断
     if (/^https?:\/\//i.test(clean)) {
       try {
@@ -87,6 +89,7 @@ function register(app, db) {
     return {
       file,
       name: path.basename(file),
+      url: original,
       mime: 'image/' + (path.extname(file).slice(1).toLowerCase() || 'png')
         .replace('jpg', 'jpeg')
     };
@@ -247,6 +250,77 @@ function register(app, db) {
     }
 
     throw new Error('生图任务等待超时（' + (lastStatus || '还在跑') + '），稍后去任务里看结果');
+  }
+
+  // 没有 /images/edits 的平台（魔搭这类）：参考图可以走异步任务 + image_url 参数。
+  // 先提交一个任务，再轮询拿结果；这条路不通就老实退回纯文字生成。
+  async function requestImageWithReferenceTask(modelRow, headers, prompt, size, refs) {
+    // 参考图要先变成公网能取到的地址；我们的 /uploads 是手机局域网地址，平台访问不到，
+    // 所以只对 http(s) 直链的参考图做这个尝试
+    const publicRefs = refs
+      .map((ref) => cleanText(ref.url))
+      .filter((url) => /^https?:\/\//i.test(url));
+
+    if (!publicRefs.length) {
+      throw new Error('参考图是本地文件，这家平台取不到；只有公网图片链接才能当参考图');
+    }
+
+    const payload = {
+      model: modelRow.model,
+      prompt,
+      n: 1,
+      size: size || '1024x1024',
+      image_url: publicRefs.length === 1 ? publicRefs[0] : publicRefs
+    };
+
+    for (const url of buildUrls(modelRow.base_url, 'images/generations')) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60000);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+
+        const text = await response.text();
+
+        if (!response.ok) {
+          if (response.status === 404 || response.status === 405) continue;
+          throw new Error(text.slice(0, 160));
+        }
+
+        let data = null;
+        try { data = JSON.parse(text); } catch (e) {}
+
+        const first = data && data.data && data.data[0];
+
+        if (first && first.url) {
+          const imageResponse = await fetch(first.url);
+          const buffer = Buffer.from(await imageResponse.arrayBuffer());
+          return { url: saveImage(buffer, '.png') };
+        }
+
+        const taskId = cleanText(data && (data.task_id || (data.data && data.data.task_id)));
+
+        if (taskId) {
+          return { url: await pollAsyncImage(modelRow, headers, taskId) };
+        }
+
+        const apiError = imageApiError(data);
+
+        if (apiError) throw new Error(apiError);
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error('参考图提交超时');
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    throw new Error('这家没有 /images/edits 接口');
   }
 
   // 带参考图的请求：OpenAI 的 /images/edits 走 multipart
@@ -499,7 +573,15 @@ function register(app, db) {
       }
     }
 
-    lines.push(editAnswer || ('参考图：用不了（' + (editError || '未知原因') + '）'));
+    if (editAnswer) {
+      lines.push(editAnswer);
+    } else if (generationOk && /没有 \/images\/edits|不支持带图改图|400/.test(editError)) {
+      // 魔搭这类：没有 edits 接口，但接受 image_url 参数，走异步任务一样能吃到参考图
+      lines.push('参考图：没走 /images/edits（' + editError.slice(0, 60) + '）');
+      lines.push('　　不过它接受 image_url 参数：参考图是公网链接时，会改走异步任务带图生成，仍然用得上');
+    } else {
+      lines.push('参考图：用不了（' + (editError || '未知原因') + '）');
+    }
 
     return { ok: true, reply: lines.join('\n') };
   }
@@ -645,6 +727,16 @@ function register(app, db) {
       // 有参考图就先试着带参考图生成；这条路不通再退回纯文字生成
       let referenceError = '';
 
+      const headers = (() => {
+        const base = { ...parseHeaders(modelRow.extra_headers) };
+
+        if (!base.Authorization && !base.authorization) {
+          base.Authorization = 'Bearer ' + modelRow.api_key;
+        }
+
+        return base;
+      })();
+
       if (refs.length) {
         try {
           const result = await requestImageWithReference(
@@ -658,6 +750,23 @@ function register(app, db) {
         } catch (e) {
           // 记住为什么没套上参考图，退回纯文字生成时告诉用户
           referenceError = String((e && e.message) || '').slice(0, 200);
+        }
+
+        // 没有 /images/edits 的平台（魔搭）：改走「异步任务 + image_url」
+        // 这条路只在参考图本身是公网链接时才有意义
+        try {
+          const taskResult = await requestImageWithReferenceTask(
+            modelRow,
+            headers,
+            prompt,
+            size,
+            refs
+          );
+
+          return res.json({ ok: true, url: taskResult.url, with_reference: true });
+        } catch (e) {
+          const text = String((e && e.message) || '').slice(0, 200);
+          referenceError = referenceError ? referenceError + '；' + text : text;
         }
       }
 
