@@ -217,25 +217,33 @@ function register(app, db) {
           lastStatus = status || lastStatus;
 
           if (status === 'SUCCEED') {
-            const output = data && data.output;
-            const imageUrl = Array.isArray(output)
-              ? cleanText(output[0])
-              : cleanText(output && (output.image_url || output.images || output.url));
+            // 各家的成功响应长得不一样：output 可能是链接、数组、对象，
+            // 也可能直接把 data[0].url / data[0].b64_json 放在顶层
+            const links = collectImageLinks(data);
 
-            if (!imageUrl) throw new Error('任务成功但没拿到图片地址');
+            if (!links.length) {
+              throw new Error('生图任务成功，但返回里没找到图片：' +
+                cleanText(text).slice(0, 160));
+            }
 
-            const imageResponse = await fetch(imageUrl);
+            const link = links[0];
+
+            // base64 直返的不用再去下载
+            if (link.startsWith('data:')) {
+              return saveImage(
+                Buffer.from(link.slice(link.indexOf(',') + 1), 'base64'),
+                '.png'
+              );
+            }
+
+            const imageResponse = await fetch(link);
             const buffer = Buffer.from(await imageResponse.arrayBuffer());
             return saveImage(buffer, '.png');
           }
 
           if (status === 'FAILED') {
-            const detail = cleanText(data && (data.message || data.error || data.errors));
+            const detail = describeTaskError(data);
             throw new Error('生图任务失败：' + (detail || '平台没给原因').slice(0, 120));
-          }
-
-          if (status === 'SUCCEED') {
-            throw new Error('任务成功但没拿到图片地址');
           }
 
           break; // 这个地址通了但还在跑，直接等下一轮
@@ -254,6 +262,62 @@ function register(app, db) {
 
   // 没有 /images/edits 的平台（魔搭这类）：参考图可以走异步任务 + image_url 参数。
   // 先提交一个任务，再轮询拿结果；这条路不通就老实退回纯文字生成。
+  // 从任务结果里翻出图片链接：output 是链接/数组/对象，或者顶层 data[0].url
+  function collectImageLinks(data) {
+    const links = [];
+    const push = (value) => {
+      const text = cleanText(value);
+      if (text && /^https?:\/\//i.test(text)) links.push(text);
+    };
+
+    const output = data && data.output;
+
+    if (Array.isArray(output)) {
+      output.forEach(push);
+    } else if (output && typeof output === 'object') {
+      push(output.image_url);
+      push(output.url);
+      if (Array.isArray(output.images)) output.images.forEach(push);
+    } else {
+      push(output);
+    }
+
+    push(data && data.image_url);
+    push(data && data.url);
+
+    const rows = data && data.data;
+
+    if (Array.isArray(rows)) {
+      rows.forEach((row) => {
+        push(row && row.url);
+        push(row && row.image_url);
+      });
+    }
+
+    // 也接受 base64 直返：落盘后给个本地地址
+    const b64 = (Array.isArray(rows) && rows[0] && rows[0].b64_json) ||
+      (data && data.b64_json);
+
+    if (!links.length && b64) {
+      links.push('data:image/png;base64,' + cleanText(b64));
+    }
+
+    return links;
+  }
+
+  // 任务失败时把平台的原话压成一句
+  function describeTaskError(data) {
+    const raw = data && (data.message || data.error || data.errors);
+
+    if (!raw) return '';
+
+    if (typeof raw === 'string') return raw;
+
+    if (Array.isArray(raw)) return raw.map((item) => item && (item.message || item)).join('；');
+
+    return cleanText(raw.message || raw.code || JSON.stringify(raw));
+  }
+
   // 参考图优先走「内嵌 base64」：图只出现在这一次请求里，不会变成任何公开地址。
   // 平台不认 base64 时才退回公网链接（手机本地的 /uploads 平台本来就取不到）。
   function refToImageUrl(ref) {

@@ -3,6 +3,12 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号按 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.30] - 2026-11-25
+
+### 修复
+- 异步任务成功却报「任务成功但没拿到图片地址」：现在兼容 output 为链接/数组/对象、
+  顶层 data[0].url、以及 b64_json 直返这几种返回形状。
+
 ## [1.2.29] - 2026-11-25
 
 ### 新增
